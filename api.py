@@ -244,6 +244,7 @@ async def stream_events(request: StreamRequest) -> AsyncGenerator[str, None]:
         action = "generate_project"
     else:
         yield yield_error("validation", "Invalid request: must provide user_input, instruction, or page_type_key/questionnaire_answers")
+        await asyncio.sleep(0)
         return
     
     # Initialize event system
@@ -278,49 +279,61 @@ async def stream_events(request: StreamRequest) -> AsyncGenerator[str, None]:
         if action == "classify_intent":
             if not request.user_input:
                 yield yield_error("validation", "user_input is required for classify_intent")
+                await asyncio.sleep(0)
                 return
             
             user_input = request.user_input.strip()
             chat_event = emitter.emit_chat_message(f"Analyzing your request: {user_input} (using {model_family})")
             yield yield_event(chat_event)
+            await asyncio.sleep(0)
             
             # Stream intent classification with model_family
             thinking_start = emitter.emit_thinking_start()
             yield yield_event(thinking_start)
+            await asyncio.sleep(0)
             
             label, meta = classify_intent(user_input, model_family=model_family)
             
             thinking_end = emitter.emit_thinking_end(duration_ms=1000)
             yield yield_event(thinking_end)
+            await asyncio.sleep(0)
             
             # Emit classification result as chat message (contract doesn't have intent_classified event)
             result_msg = f"Intent: {label} (confidence: {meta.get('confidence', 0):.2f})"
             result_event = emitter.emit_chat_message(result_msg)
             yield yield_event(result_event)
+            await asyncio.sleep(0)
             
             if label == "greeting_only":
                 greeting = generate_greeting_response(user_input)
                 greeting_event = emitter.emit_chat_message(greeting)
                 yield yield_event(greeting_event)
+                await asyncio.sleep(0)
                 complete_event = emitter.emit_stream_complete()
                 yield yield_event(complete_event)
+                await asyncio.sleep(0)
                 return
             
             if label == "illegal":
                 illegal_event = emitter.emit_chat_message("Sorry — I can't help with that request.")
                 yield yield_event(illegal_event)
+                await asyncio.sleep(0)
                 yield yield_error("llm", "Illegal request")
+                await asyncio.sleep(0)
                 complete_event = emitter.emit_stream_complete()
                 yield yield_event(complete_event)
+                await asyncio.sleep(0)
                 return
             
             if label == "chat":
                 smaller_model = get_smaller_model(model_family=model_family)
                 help_event = emitter.emit_chat_message("Let me help you with that...")
                 yield yield_event(help_event)
+                await asyncio.sleep(0)
                 
                 thinking_start = emitter.emit_thinking_start()
                 yield yield_event(thinking_start)
+                await asyncio.sleep(0)
                 
                 # Stream chat response - use edit.start for streaming chunks (contract allows multiple chunks)
                 from events import EditStartEvent
@@ -341,35 +354,43 @@ async def stream_events(request: StreamRequest) -> AsyncGenerator[str, None]:
                         conversation_id=conversation_id
                     )
                     yield yield_event(edit_chunk)
+                    await asyncio.sleep(0)
                 
                 thinking_end = emitter.emit_thinking_end(duration_ms=1000)
                 yield yield_event(thinking_end)
+                await asyncio.sleep(0)
                 
                 # Emit final chat message with complete response
                 final_event = emitter.emit_chat_message(response_text)
                 yield yield_event(final_event)
+                await asyncio.sleep(0)
                 
                 complete_event = emitter.emit_stream_complete()
                 yield yield_event(complete_event)
+                await asyncio.sleep(0)
                 return
             
             if label == "webpage_build":
                 # Classify page type with model_family
                 page_type_msg = emitter.emit_chat_message("Determining the best page type for your project...")
                 yield yield_event(page_type_msg)
+                await asyncio.sleep(0)
                 
                 thinking_start = emitter.emit_thinking_start()
                 yield yield_event(thinking_start)
+                await asyncio.sleep(0)
                 
                 page_type_key, page_type_meta = classify_page_type(user_input, model_family=model_family)
                 
                 thinking_end = emitter.emit_thinking_end(duration_ms=1000)
                 yield yield_event(thinking_end)
+                await asyncio.sleep(0)
                 
                 # Emit page type result as chat message
                 page_result_msg = f"Selected page type: {page_type_key}"
                 page_result_event = emitter.emit_chat_message(page_result_msg)
                 yield yield_event(page_result_event)
+                await asyncio.sleep(0)
                 
                 # Analyze query detail with model_family
                 needs_followup, detail_confidence = analyze_query_detail(user_input, model_family=model_family)
@@ -393,8 +414,10 @@ async def stream_events(request: StreamRequest) -> AsyncGenerator[str, None]:
                         conversation_id=conversation_id
                     )
                     yield yield_event(multiselect_event)
+                    await asyncio.sleep(0)
                     await_input = emitter.emit_stream_await_input(reason="multiselect")
                     yield yield_event(await_input)
+                    await asyncio.sleep(0)
                     return
                 
                 if needs_followup and has_questionnaire(page_type_key):
@@ -424,16 +447,20 @@ async def stream_events(request: StreamRequest) -> AsyncGenerator[str, None]:
                             content=content
                         )
                         yield yield_event(question_event)
+                        await asyncio.sleep(0)
                     
                     await_input = emitter.emit_stream_await_input(reason="suggestion")
                     yield yield_event(await_input)
+                    await asyncio.sleep(0)
                     return
                 
                 # Ready to generate - emit as chat message
                 ready_msg = emitter.emit_chat_message(f"Ready to generate {page_type_key} project")
                 yield yield_event(ready_msg)
+                await asyncio.sleep(0)
                 complete_event = emitter.emit_stream_complete()
                 yield yield_event(complete_event)
+                await asyncio.sleep(0)
                 return
         
         elif action == "generate_project":
@@ -449,33 +476,41 @@ async def stream_events(request: StreamRequest) -> AsyncGenerator[str, None]:
                 user_input = user_input.strip()
                 analyze_msg = emitter.emit_chat_message(f"Analyzing your request: {user_input} (using {model_family})")
                 yield yield_event(analyze_msg)
+                await asyncio.sleep(0)
                 
                 # Classify intent
                 thinking_start = emitter.emit_thinking_start()
                 yield yield_event(thinking_start)
+                await asyncio.sleep(0)
                 
                 label, meta = classify_intent(user_input, model_family=model_family)
                 
                 thinking_end = emitter.emit_thinking_end(duration_ms=1000)
                 yield yield_event(thinking_end)
+                await asyncio.sleep(0)
                 
                 if label != "webpage_build":
                     if label == "greeting_only":
                         greeting = generate_greeting_response(user_input)
                         greeting_event = emitter.emit_chat_message(greeting)
                         yield yield_event(greeting_event)
+                        await asyncio.sleep(0)
                     elif label == "illegal":
                         illegal_event = emitter.emit_chat_message("Sorry — I can't help with that request.")
                         yield yield_event(illegal_event)
+                        await asyncio.sleep(0)
                         yield yield_error("llm", "Illegal request")
+                        await asyncio.sleep(0)
                     elif label == "chat":
                         # Handle chat response
                         smaller_model = get_smaller_model(model_family=model_family)
                         help_msg = emitter.emit_chat_message("Let me help you with that...")
                         yield yield_event(help_msg)
+                        await asyncio.sleep(0)
                         
                         thinking_start = emitter.emit_thinking_start()
                         yield yield_event(thinking_start)
+                        await asyncio.sleep(0)
                         
                         from events import EditStartEvent
                         response_text = ""
@@ -494,28 +529,35 @@ async def stream_events(request: StreamRequest) -> AsyncGenerator[str, None]:
                                 conversation_id=conversation_id
                             )
                             yield yield_event(edit_chunk)
+                            await asyncio.sleep(0)
                         
                         thinking_end = emitter.emit_thinking_end(duration_ms=1000)
                         yield yield_event(thinking_end)
+                        await asyncio.sleep(0)
                         
                         final_msg = emitter.emit_chat_message(response_text)
                         yield yield_event(final_msg)
+                        await asyncio.sleep(0)
                     
                     complete_event = emitter.emit_stream_complete()
                     yield yield_event(complete_event)
+                    await asyncio.sleep(0)
                     return
                 
                 # Intent is webpage_build - classify page type
                 page_type_msg = emitter.emit_chat_message("Determining the best page type for your project...")
                 yield yield_event(page_type_msg)
+                await asyncio.sleep(0)
                 
                 thinking_start = emitter.emit_thinking_start()
                 yield yield_event(thinking_start)
+                await asyncio.sleep(0)
                 
                 page_type_key, page_type_meta = classify_page_type(user_input, model_family=model_family)
                 
                 thinking_end = emitter.emit_thinking_end(duration_ms=1000)
                 yield yield_event(thinking_end)
+                await asyncio.sleep(0)
                 
                 # Store in session
                 session["page_type_key"] = page_type_key
@@ -528,6 +570,7 @@ async def stream_events(request: StreamRequest) -> AsyncGenerator[str, None]:
                 page_result_msg = f"Selected page type: {page_type_key}"
                 page_result_event = emitter.emit_chat_message(page_result_msg)
                 yield yield_event(page_result_event)
+                await asyncio.sleep(0)
                 
                 # Analyze if questionnaire is needed
                 needs_followup, detail_confidence = analyze_query_detail(user_input, model_family=model_family)
@@ -545,8 +588,10 @@ async def stream_events(request: StreamRequest) -> AsyncGenerator[str, None]:
                         conversation_id=conversation_id
                     )
                     yield yield_event(multiselect_event)
+                    await asyncio.sleep(0)
                     await_input = emitter.emit_stream_await_input(reason="multiselect")
                     yield yield_event(await_input)
+                    await asyncio.sleep(0)
                     return
                 
                 if needs_followup and has_questionnaire(page_type_key):
@@ -554,6 +599,7 @@ async def stream_events(request: StreamRequest) -> AsyncGenerator[str, None]:
                     questionnaire = get_questionnaire(page_type_key)
                     gather_msg = emitter.emit_chat_message("I need to gather some additional information to create the perfect page for you.")
                     yield yield_event(gather_msg)
+                    await asyncio.sleep(0)
                     
                     # Emit questions
                     type_mapping = {"radio": "mcq", "multiselect": "multi_select"}
@@ -576,9 +622,11 @@ async def stream_events(request: StreamRequest) -> AsyncGenerator[str, None]:
                             content=content
                         )
                         yield yield_event(question_event)
+                        await asyncio.sleep(0)
                     
                     await_input = emitter.emit_stream_await_input(reason="suggestion")
                     yield yield_event(await_input)
+                    await asyncio.sleep(0)
                     return
                 
                 # Ready to generate - continue to generation below
@@ -586,10 +634,12 @@ async def stream_events(request: StreamRequest) -> AsyncGenerator[str, None]:
             # Now proceed with project generation
             if not page_type_key:
                 yield yield_error("validation", "page_type_key is required. Please provide user_input first or select a page type.")
+                await asyncio.sleep(0)
                 return
             
             start_msg = emitter.emit_chat_message("Starting project generation...")
             yield yield_event(start_msg)
+            await asyncio.sleep(0)
             
             # Build prompt
             base_prompt = (
@@ -639,6 +689,7 @@ async def stream_events(request: StreamRequest) -> AsyncGenerator[str, None]:
                 webpage_model = provider.get_default_model()
             except Exception as e:
                 yield yield_error("llm", f"Failed to initialize {model_family} provider: {str(e)}")
+                await asyncio.sleep(0)
                 return
             
             progress_init = emitter.emit_progress_init(
@@ -651,18 +702,23 @@ async def stream_events(request: StreamRequest) -> AsyncGenerator[str, None]:
                 mode="inline"
             )
             yield yield_event(progress_init)
+            await asyncio.sleep(0)
             
             progress_prepare = emitter.emit_progress_update("prepare", "completed")
             yield yield_event(progress_prepare)
+            await asyncio.sleep(0)
             
             progress_generate = emitter.emit_progress_update("generate", "in_progress")
             yield yield_event(progress_generate)
+            await asyncio.sleep(0)
             
             thinking_start = emitter.emit_thinking_start()
             yield yield_event(thinking_start)
+            await asyncio.sleep(0)
             
             gen_msg = emitter.emit_chat_message(f"Generating project using {webpage_model} ({model_family})...")
             yield yield_event(gen_msg)
+            await asyncio.sleep(0)
             start_time = time.time()
             
             # Stream the generation - use edit.start for streaming chunks
@@ -684,16 +740,20 @@ async def stream_events(request: StreamRequest) -> AsyncGenerator[str, None]:
                     conversation_id=conversation_id
                 )
                 yield yield_event(edit_chunk)
+                await asyncio.sleep(0)
             
             elapsed_time = time.time() - start_time
             thinking_end = emitter.emit_thinking_end(duration_ms=int(elapsed_time * 1000))
             yield yield_event(thinking_end)
+            await asyncio.sleep(0)
             
             progress_gen_complete = emitter.emit_progress_update("generate", "completed")
             yield yield_event(progress_gen_complete)
+            await asyncio.sleep(0)
             
             progress_parse = emitter.emit_progress_update("parse", "in_progress")
             yield yield_event(progress_parse)
+            await asyncio.sleep(0)
             
             if not output or len(output) < 100:
                 raise Exception("Model returned empty or very short output")
@@ -703,6 +763,7 @@ async def stream_events(request: StreamRequest) -> AsyncGenerator[str, None]:
             if not project:
                 parse_failed = emitter.emit_progress_update("parse", "failed")
                 yield yield_event(parse_failed)
+                await asyncio.sleep(0)
                 
                 error_event = emitter.emit_error(
                     scope="validation",
@@ -711,19 +772,24 @@ async def stream_events(request: StreamRequest) -> AsyncGenerator[str, None]:
                     actions=["retry", "ask_user"]
                 )
                 yield yield_event(error_event)
+                await asyncio.sleep(0)
                 
                 stream_failed = emitter.emit_stream_failed()
                 yield yield_event(stream_failed)
+                await asyncio.sleep(0)
                 return
             
             parse_complete = emitter.emit_progress_update("parse", "completed")
             yield yield_event(parse_complete)
+            await asyncio.sleep(0)
             
             save_progress = emitter.emit_progress_update("save", "in_progress")
             yield yield_event(save_progress)
+            await asyncio.sleep(0)
             
             parsed_msg = emitter.emit_chat_message(f"JSON parsed successfully. Project has {len(project.get('files', {}))} files.")
             yield yield_event(parsed_msg)
+            await asyncio.sleep(0)
             
             # Save project
             project_json_path = f"{OUTPUT_DIR}/project.json"
@@ -770,17 +836,21 @@ async def stream_events(request: StreamRequest) -> AsyncGenerator[str, None]:
             
             save_complete = emitter.emit_progress_update("save", "completed")
             yield yield_event(save_complete)
+            await asyncio.sleep(0)
             
             success_msg = emitter.emit_chat_message("Base project generated successfully!")
             yield yield_event(success_msg)
+            await asyncio.sleep(0)
             
             complete_event = emitter.emit_stream_complete()
             yield yield_event(complete_event)
+            await asyncio.sleep(0)
             return
         
         elif action == "modify_project":
             if not request.instruction:
                 yield yield_error("validation", "instruction is required for modify_project")
+                await asyncio.sleep(0)
                 return
             
             base_path = request.base_project_path or session.get("last_project_path")
@@ -789,6 +859,7 @@ async def stream_events(request: StreamRequest) -> AsyncGenerator[str, None]:
             
             if not base_path or not os.path.exists(base_path):
                 yield yield_error("validation", "Base project not found")
+                await asyncio.sleep(0)
                 return
             
             with open(base_path) as f:
@@ -804,9 +875,11 @@ Request: {request.instruction}"""
             
             mod_msg = emitter.emit_chat_message(f"Modifying project (complexity: {complexity})...")
             yield yield_event(mod_msg)
+            await asyncio.sleep(0)
             
             thinking_start = emitter.emit_thinking_start()
             yield yield_event(thinking_start)
+            await asyncio.sleep(0)
             
             # Stream modification - use edit.start for streaming chunks
             from events import EditStartEvent
@@ -827,9 +900,11 @@ Request: {request.instruction}"""
                     conversation_id=conversation_id
                 )
                 yield yield_event(edit_chunk)
+                await asyncio.sleep(0)
             
             thinking_end = emitter.emit_thinking_end(duration_ms=1000)
             yield yield_event(thinking_end)
+            await asyncio.sleep(0)
             
             mod_project = parse_project_json(mod_out)
             
@@ -854,10 +929,12 @@ Request: {request.instruction}"""
                             conversation_id=conversation_id
                         )
                         yield yield_event(edit_chunk)
+                        await asyncio.sleep(0)
                     mod_project = parse_project_json(mod_out)
             
             if not mod_project:
                 yield yield_error("validation", "Invalid modification output")
+                await asyncio.sleep(0)
                 return
             
             # Save modified project
@@ -900,26 +977,32 @@ Request: {request.instruction}"""
                     content=content if isinstance(content, str) else json.dumps(content)
                 )
                 yield yield_event(fs_write)
+                await asyncio.sleep(0)
             
             complete_msg = emitter.emit_chat_message(f"Project modified successfully! {len(files)} files updated.")
             yield yield_event(complete_msg)
+            await asyncio.sleep(0)
             
             complete_event = emitter.emit_stream_complete()
             yield yield_event(complete_event)
+            await asyncio.sleep(0)
             return
         
         elif action == "chat":
             if not request.user_input:
                 yield yield_error("validation", "user_input is required for chat")
+                await asyncio.sleep(0)
                 return
             
             user_input = request.user_input.strip()
             smaller_model = get_smaller_model(model_family=model_family)
             help_msg = emitter.emit_chat_message("Let me help you with that...")
             yield yield_event(help_msg)
+            await asyncio.sleep(0)
             
             thinking_start = emitter.emit_thinking_start()
             yield yield_event(thinking_start)
+            await asyncio.sleep(0)
             
             # Stream chat response - use edit.start for streaming chunks
             from events import EditStartEvent
@@ -940,26 +1023,33 @@ Request: {request.instruction}"""
                     conversation_id=conversation_id
                 )
                 yield yield_event(edit_chunk)
+                await asyncio.sleep(0)
             
             thinking_end = emitter.emit_thinking_end(duration_ms=1000)
             yield yield_event(thinking_end)
+            await asyncio.sleep(0)
             
             final_msg = emitter.emit_chat_message(response_text)
             yield yield_event(final_msg)
+            await asyncio.sleep(0)
             
             complete_event = emitter.emit_stream_complete()
             yield yield_event(complete_event)
+            await asyncio.sleep(0)
             return
         
         else:
             yield yield_error("validation", f"Could not determine action from payload")
+            await asyncio.sleep(0)
     
     except Exception as e:
         error_msg = str(e)
         error_event = emitter.emit_error(scope="runtime", message=error_msg)
         yield yield_event(error_event)
+        await asyncio.sleep(0)
         stream_failed = emitter.emit_stream_failed()
         yield yield_event(stream_failed)
+        await asyncio.sleep(0)
 
 
 @app.post("/api/v1/stream")
