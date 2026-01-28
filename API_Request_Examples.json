@@ -1,0 +1,354 @@
+{
+  "base_url": "http://localhost:8000",
+  "model_families": ["gemini", "gpt", "claude"],
+  "examples": {
+    "classify_intent_gemini": {
+      "method": "POST",
+      "url": "/api/v1/stream",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": {
+        "action": "classify_intent",
+        "session_id": "session_123",
+        "model_family": "gemini",
+        "user_input": "I want to build an e-commerce website"
+      },
+      "description": "Classify user intent using Gemini. Returns intent classification, page type, and may ask questions."
+    },
+    "classify_intent_gpt": {
+      "method": "POST",
+      "url": "/api/v1/stream",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": {
+        "action": "classify_intent",
+        "session_id": "session_123",
+        "model_family": "gpt",
+        "user_input": "I want to build an e-commerce website"
+      },
+      "description": "Classify user intent using GPT. Returns intent classification, page type, and may ask questions."
+    },
+    "classify_intent_claude": {
+      "method": "POST",
+      "url": "/api/v1/stream",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": {
+        "action": "classify_intent",
+        "session_id": "session_123",
+        "model_family": "claude",
+        "user_input": "I want to build an e-commerce website"
+      },
+      "description": "Classify user intent using Claude. Returns intent classification, page type, and may ask questions."
+    },
+    "chat_gemini": {
+      "method": "POST",
+      "url": "/api/v1/stream",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": {
+        "action": "chat",
+        "session_id": "session_123",
+        "model_family": "gemini",
+        "user_input": "What is React and how does it work?"
+      },
+      "description": "Chat with AI using Gemini. Streams response chunks in real-time."
+    },
+    "chat_gpt": {
+      "method": "POST",
+      "url": "/api/v1/stream",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": {
+        "action": "chat",
+        "session_id": "session_123",
+        "model_family": "gpt",
+        "user_input": "What is React and how does it work?"
+      },
+      "description": "Chat with AI using GPT. Streams response chunks in real-time."
+    },
+    "chat_claude": {
+      "method": "POST",
+      "url": "/api/v1/stream",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": {
+        "action": "chat",
+        "session_id": "session_123",
+        "model_family": "claude",
+        "user_input": "What is React and how does it work?"
+      },
+      "description": "Chat with AI using Claude. Streams response chunks in real-time."
+    },
+    "generate_project_gemini": {
+      "method": "POST",
+      "url": "/api/v1/stream",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": {
+        "action": "generate_project",
+        "session_id": "session_123",
+        "model_family": "gemini",
+        "page_type_key": "ecommerce",
+        "wizard_inputs": {
+          "hero_text": "Welcome to our store",
+          "subtext": "Best products at best prices",
+          "cta": "Shop Now",
+          "theme": "Light"
+        }
+      },
+      "description": "Generate a project using Gemini with basic wizard inputs. Streams generation progress."
+    },
+    "generate_project_gpt": {
+      "method": "POST",
+      "url": "/api/v1/stream",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": {
+        "action": "generate_project",
+        "session_id": "session_123",
+        "model_family": "gpt",
+        "page_type_key": "ecommerce",
+        "wizard_inputs": {
+          "hero_text": "Welcome to our store",
+          "subtext": "Best products at best prices",
+          "cta": "Shop Now",
+          "theme": "Light"
+        }
+      },
+      "description": "Generate a project using GPT with basic wizard inputs. Streams generation progress."
+    },
+    "generate_project_claude": {
+      "method": "POST",
+      "url": "/api/v1/stream",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": {
+        "action": "generate_project",
+        "session_id": "session_123",
+        "model_family": "claude",
+        "page_type_key": "ecommerce",
+        "wizard_inputs": {
+          "hero_text": "Welcome to our store",
+          "subtext": "Best products at best prices",
+          "cta": "Shop Now",
+          "theme": "Light"
+        }
+      },
+      "description": "Generate a project using Claude with basic wizard inputs. Streams generation progress."
+    },
+    "generate_project_with_questionnaire_gemini": {
+      "method": "POST",
+      "url": "/api/v1/stream",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": {
+        "action": "generate_project",
+        "session_id": "session_123",
+        "model_family": "gemini",
+        "page_type_key": "ecommerce",
+        "questionnaire_answers": {
+          "target_audience": "young_adults",
+          "product_categories": ["electronics", "clothing"],
+          "payment_methods": "credit_card"
+        },
+        "wizard_inputs": {
+          "hero_text": "Welcome to our store",
+          "subtext": "Best products at best prices",
+          "cta": "Shop Now",
+          "theme": "Dark"
+        }
+      },
+      "description": "Generate a project using Gemini with questionnaire answers. Use after answering questions from classify_intent."
+    },
+    "generate_project_with_questionnaire_gpt": {
+      "method": "POST",
+      "url": "/api/v1/stream",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": {
+        "action": "generate_project",
+        "session_id": "session_123",
+        "model_family": "gpt",
+        "page_type_key": "ecommerce",
+        "questionnaire_answers": {
+          "target_audience": "young_adults",
+          "product_categories": ["electronics", "clothing"],
+          "payment_methods": "credit_card"
+        },
+        "wizard_inputs": {
+          "hero_text": "Welcome to our store",
+          "subtext": "Best products at best prices",
+          "cta": "Shop Now",
+          "theme": "Dark"
+        }
+      },
+      "description": "Generate a project using GPT with questionnaire answers. Use after answering questions from classify_intent."
+    },
+    "generate_project_with_questionnaire_claude": {
+      "method": "POST",
+      "url": "/api/v1/stream",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": {
+        "action": "generate_project",
+        "session_id": "session_123",
+        "model_family": "claude",
+        "page_type_key": "ecommerce",
+        "questionnaire_answers": {
+          "target_audience": "young_adults",
+          "product_categories": ["electronics", "clothing"],
+          "payment_methods": "credit_card"
+        },
+        "wizard_inputs": {
+          "hero_text": "Welcome to our store",
+          "subtext": "Best products at best prices",
+          "cta": "Shop Now",
+          "theme": "Dark"
+        }
+      },
+      "description": "Generate a project using Claude with questionnaire answers. Use after answering questions from classify_intent."
+    },
+    "modify_project_gemini": {
+      "method": "POST",
+      "url": "/api/v1/stream",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": {
+        "action": "modify_project",
+        "session_id": "session_123",
+        "model_family": "gemini",
+        "instruction": "Change the theme to dark mode and add a footer with social media links",
+        "base_project_path": "output/project.json"
+      },
+      "description": "Modify existing project using Gemini. Streams modification progress."
+    },
+    "modify_project_gpt": {
+      "method": "POST",
+      "url": "/api/v1/stream",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": {
+        "action": "modify_project",
+        "session_id": "session_123",
+        "model_family": "gpt",
+        "instruction": "Change the theme to dark mode and add a footer with social media links",
+        "base_project_path": "output/project.json"
+      },
+      "description": "Modify existing project using GPT. Streams modification progress."
+    },
+    "modify_project_claude": {
+      "method": "POST",
+      "url": "/api/v1/stream",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": {
+        "action": "modify_project",
+        "session_id": "session_123",
+        "model_family": "claude",
+        "instruction": "Change the theme to dark mode and add a footer with social media links",
+        "base_project_path": "output/project.json"
+      },
+      "description": "Modify existing project using Claude. Streams modification progress."
+    },
+    "get_page_types": {
+      "method": "GET",
+      "url": "/api/v1/page-types",
+      "headers": {},
+      "body": null,
+      "description": "Get all available page types/categories"
+    },
+    "get_questionnaire": {
+      "method": "GET",
+      "url": "/api/v1/questionnaire/ecommerce",
+      "headers": {},
+      "body": null,
+      "description": "Get questionnaire for a specific page type"
+    },
+    "get_latest_project": {
+      "method": "GET",
+      "url": "/api/v1/latest-project",
+      "headers": {},
+      "body": null,
+      "description": "Get the latest generated project"
+    },
+    "health_check": {
+      "method": "GET",
+      "url": "/api/v1/health",
+      "headers": {},
+      "body": null,
+      "description": "Health check endpoint"
+    }
+  },
+  "curl_examples": {
+    "classify_intent_gemini": "curl -X POST 'http://localhost:8000/api/v1/stream' -H 'Content-Type: application/json' -N -d '{\"action\": \"classify_intent\", \"session_id\": \"session_123\", \"model_family\": \"gemini\", \"user_input\": \"I want to build an e-commerce website\"}'",
+    "classify_intent_gpt": "curl -X POST 'http://localhost:8000/api/v1/stream' -H 'Content-Type: application/json' -N -d '{\"action\": \"classify_intent\", \"session_id\": \"session_123\", \"model_family\": \"gpt\", \"user_input\": \"I want to build an e-commerce website\"}'",
+    "classify_intent_claude": "curl -X POST 'http://localhost:8000/api/v1/stream' -H 'Content-Type: application/json' -N -d '{\"action\": \"classify_intent\", \"session_id\": \"session_123\", \"model_family\": \"claude\", \"user_input\": \"I want to build an e-commerce website\"}'",
+    "chat_gemini": "curl -X POST 'http://localhost:8000/api/v1/stream' -H 'Content-Type: application/json' -N -d '{\"action\": \"chat\", \"session_id\": \"session_123\", \"model_family\": \"gemini\", \"user_input\": \"What is React?\"}'",
+    "chat_gpt": "curl -X POST 'http://localhost:8000/api/v1/stream' -H 'Content-Type: application/json' -N -d '{\"action\": \"chat\", \"session_id\": \"session_123\", \"model_family\": \"gpt\", \"user_input\": \"What is React?\"}'",
+    "chat_claude": "curl -X POST 'http://localhost:8000/api/v1/stream' -H 'Content-Type: application/json' -N -d '{\"action\": \"chat\", \"session_id\": \"session_123\", \"model_family\": \"claude\", \"user_input\": \"What is React?\"}'",
+    "generate_project_gemini": "curl -X POST 'http://localhost:8000/api/v1/stream' -H 'Content-Type: application/json' -N -d '{\"action\": \"generate_project\", \"session_id\": \"session_123\", \"model_family\": \"gemini\", \"page_type_key\": \"ecommerce\", \"wizard_inputs\": {\"hero_text\": \"Welcome\", \"subtext\": \"Best products\", \"cta\": \"Shop Now\", \"theme\": \"Light\"}}'",
+    "generate_project_gpt": "curl -X POST 'http://localhost:8000/api/v1/stream' -H 'Content-Type: application/json' -N -d '{\"action\": \"generate_project\", \"session_id\": \"session_123\", \"model_family\": \"gpt\", \"page_type_key\": \"ecommerce\", \"wizard_inputs\": {\"hero_text\": \"Welcome\", \"subtext\": \"Best products\", \"cta\": \"Shop Now\", \"theme\": \"Light\"}}'",
+    "generate_project_claude": "curl -X POST 'http://localhost:8000/api/v1/stream' -H 'Content-Type: application/json' -N -d '{\"action\": \"generate_project\", \"session_id\": \"session_123\", \"model_family\": \"claude\", \"page_type_key\": \"ecommerce\", \"wizard_inputs\": {\"hero_text\": \"Welcome\", \"subtext\": \"Best products\", \"cta\": \"Shop Now\", \"theme\": \"Light\"}}'",
+    "modify_project_gemini": "curl -X POST 'http://localhost:8000/api/v1/stream' -H 'Content-Type: application/json' -N -d '{\"action\": \"modify_project\", \"session_id\": \"session_123\", \"model_family\": \"gemini\", \"instruction\": \"Change theme to dark mode\"}'",
+    "modify_project_gpt": "curl -X POST 'http://localhost:8000/api/v1/stream' -H 'Content-Type: application/json' -N -d '{\"action\": \"modify_project\", \"session_id\": \"session_123\", \"model_family\": \"gpt\", \"instruction\": \"Change theme to dark mode\"}'",
+    "modify_project_claude": "curl -X POST 'http://localhost:8000/api/v1/stream' -H 'Content-Type: application/json' -N -d '{\"action\": \"modify_project\", \"session_id\": \"session_123\", \"model_family\": \"claude\", \"instruction\": \"Change theme to dark mode\"}'"
+  },
+  "event_types": {
+    "intent_classified": "Intent classification result",
+    "page_type_classified": "Page type classification result",
+    "question": "Questionnaire question (requires answer)",
+    "needs_page_type_selection": "User needs to select page type",
+    "ready_to_generate": "Ready to generate project",
+    "chat_chunk": "Streaming chat response chunk",
+    "chat_complete": "Chat response complete",
+    "greeting": "Greeting response",
+    "generation_chunk": "Streaming project generation chunk",
+    "modification_chunk": "Streaming modification chunk",
+    "progress_init": "Progress initialization",
+    "progress_update": "Progress step update",
+    "thinking_start": "Thinking started",
+    "thinking_end": "Thinking ended",
+    "parse_complete": "JSON parsing complete",
+    "project_generated": "Project generation complete",
+    "modification_complete": "Modification complete",
+    "stream_complete": "Stream finished",
+    "error": "Error occurred"
+  },
+  "model_families_info": {
+    "gemini": {
+      "provider": "Google Vertex AI",
+      "required_env": ["GOOGLE_CLOUD_PROJECT"],
+      "optional_env": ["GOOGLE_CLOUD_LOCATION"],
+      "default_model": "gemini-3-pro-preview",
+      "smaller_model": "gemini-2.0-flash-lite"
+    },
+    "gpt": {
+      "provider": "OpenAI",
+      "required_env": ["OPENAI_API_KEY"],
+      "default_model": "gpt-4o",
+      "smaller_model": "gpt-4o-mini"
+    },
+    "claude": {
+      "provider": "Anthropic",
+      "required_env": ["ANTHROPIC_API_KEY"],
+      "default_model": "claude-3-5-sonnet-20241022",
+      "smaller_model": "claude-3-haiku-20240307"
+    }
+  }
+}

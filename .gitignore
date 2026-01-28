@@ -1,0 +1,62 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual Environment
+gemini_v4_opt/
+venv/
+env/
+ENV/
+.venv
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# API Keys and Secrets
+*.json
+!package.json
+!tsconfig.json
+!Postman_Collection.json
+!API_Request_Examples.json
+n0project-*.json
+bedrock-router-*.json
+*-*.json
+
+# Generated output
+output/
+modified_output/
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Large SDK files
+google-cloud-sdk/
+google-cloud-cli-*.tar.gz
+
+# Testing
+testing/
+
+# Documentation (optional - uncomment if you want to exclude)
+# *.docx
+
+# Temporary files
+*.tmp
+*.bak
+

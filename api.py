@@ -1,0 +1,1362 @@
+# api.py
+import os
+import json
+import time
+from pathlib import Path
+from typing import Optional, Dict, Any, List
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+from typing import AsyncGenerator
+import asyncio
+from utils.logger import log
+from utils.event_logger import get_event_logger
+from intent.greeting_generator import generate_greeting_response
+from events import EventEmitter
+from events.event_types import EventEnvelope
+
+# Import from unified_client for multi-family support
+from models.unified_client import (
+    generate_text,
+    generate_stream,
+    classify_intent,
+    classify_page_type,
+    analyze_query_detail,
+    chat_response,
+    parse_project_json,
+    save_project_files,
+    classify_modification_complexity,
+    get_model_for_complexity,
+    get_smaller_model,
+    generate_feature_recommendations,
+)
+from data.page_types_reference import get_page_type_by_key, search_page_type_by_keywords
+from data.questionnaire_config import get_questionnaire, has_questionnaire
+from data.page_categories import get_all_categories, get_category_key_from_display_name
+
+# --------------------------------------------------
+# ENV + DIRS
+# --------------------------------------------------
+load_dotenv()
+
+OUTPUT_DIR = "output"
+MODIFIED_DIR = "modified_output"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+os.makedirs(MODIFIED_DIR, exist_ok=True)
+
+THEMES = ["Light", "Dark", "Minimal"]
+
+# --------------------------------------------------
+# FASTAPI APP
+# --------------------------------------------------
+app = FastAPI(
+    title="Webpage Builder AI API",
+    description="API for generating and modifying web projects using AI",
+    version="1.0.0"
+)
+
+# Add CORS middleware for frontend access
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, replace with specific origins
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# In-memory session store (in production, use Redis or database)
+sessions: Dict[str, Dict[str, Any]] = {}
+
+# --------------------------------------------------
+# REQUEST/RESPONSE MODELS
+# --------------------------------------------------
+
+class IntentRequest(BaseModel):
+    user_input: str = Field(..., description="User query or input")
+
+class IntentResponse(BaseModel):
+    label: str
+    meta: Dict[str, Any]
+    greeting_response: Optional[str] = None
+    chat_response: Optional[str] = None
+    page_type_key: Optional[str] = None
+    page_type_meta: Optional[Dict[str, Any]] = None
+    needs_questionnaire: Optional[bool] = None
+    needs_page_type_selection: Optional[bool] = None
+
+class PageTypeRequest(BaseModel):
+    page_type_key: str = Field(..., description="Selected page type key")
+
+class QuestionnaireAnswer(BaseModel):
+    question_id: str
+    answer: Any  # Can be string or list
+
+class QuestionnaireRequest(BaseModel):
+    page_type_key: str
+    answers: List[QuestionnaireAnswer]
+
+class WizardInputs(BaseModel):
+    hero_text: Optional[str] = None
+    subtext: Optional[str] = None
+    cta: Optional[str] = "Get Started"
+    theme: Optional[str] = "Light"
+
+class GenerateProjectRequest(BaseModel):
+    session_id: str
+    wizard_inputs: WizardInputs
+    model_family: str = Field(default="gemini", description="Model family: 'gemini', 'gpt', or 'claude'")
+    page_type_key: Optional[str] = None
+    questionnaire_answers: Optional[Dict[str, Any]] = None
+
+class ModifyProjectRequest(BaseModel):
+    session_id: str
+    instruction: str
+    model_family: str = Field(default="gemini", description="Model family: 'gemini', 'gpt', or 'claude'")
+    base_project_path: Optional[str] = None
+
+class ProjectResponse(BaseModel):
+    success: bool
+    project_path: Optional[str] = None
+    project_json_path: Optional[str] = None
+    files_count: Optional[int] = None
+    message: str
+    events_file: Optional[str] = None
+
+# Unified streaming request model
+class StreamRequest(BaseModel):
+    """Unified request model for streaming API - action is inferred from payload"""
+    session_id: Optional[str] = Field(None, description="Session identifier (optional, auto-generated if not provided)")
+    model_family: str = Field(default="gemini", description="Model family: 'gemini', 'gpt', or 'claude'")
+    user_input: Optional[str] = Field(None, description="User input/query. For project generation: required on first call")
+    page_type_key: Optional[str] = Field(None, description="Page type key. For project generation: optional on first call (will be determined), required on follow-up")
+    questionnaire_answers: Optional[Dict[str, Any]] = Field(None, description="Questionnaire answers. For project generation: optional, provided after questions are asked")
+    wizard_inputs: Optional[WizardInputs] = Field(None, description="Wizard inputs for project generation")
+    instruction: Optional[str] = Field(None, description="Modification instruction (indicates modify_project action)")
+    base_project_path: Optional[str] = Field(None, description="Base project path for modifications")
+    project_id: Optional[str] = Field(None, description="Project identifier (optional, auto-generated if not provided)")
+
+# --------------------------------------------------
+# HELPERS
+# --------------------------------------------------
+def get_latest_project():
+    """
+    Priority:
+    1. latest modified_output/project_x/project.json
+    2. output/project.json
+    """
+    if os.path.exists(MODIFIED_DIR):
+        versions = sorted(
+            d for d in os.listdir(MODIFIED_DIR) if d.startswith("project_")
+        )
+        if versions:
+            path = os.path.join(MODIFIED_DIR, versions[-1], "project.json")
+            with open(path) as f:
+                return path, json.load(f)["project"]
+
+    base = os.path.join(OUTPUT_DIR, "project.json")
+    if os.path.exists(base):
+        with open(base) as f:
+            return base, json.load(f)["project"]
+
+    return None, None
+
+
+def safe_theme_index(value):
+    v = (value or "Light").strip().title()
+    return THEMES.index(v) if v in THEMES else 0
+
+
+def get_or_create_session(session_id: str) -> Dict[str, Any]:
+    """Get or create a session"""
+    if session_id not in sessions:
+        sessions[session_id] = {
+            "step": 0,
+            "collected": {},
+            "initial_intent": "",
+            "final_summary": "",
+            "last_project_path": "",
+            "last_output_text": "",
+            "page_type_key": "",
+            "page_type_config": None,
+            "needs_questionnaire": False,
+            "questionnaire_answers": {},
+            "selected_page_category": None,
+            "questionnaire_emitter": None,
+            "must_have_features": {},
+            "competitor_suggestions": {},
+            "history": {
+                "initial_query": "",
+                "wizard_inputs": {},
+                "modifications": [],
+            }
+        }
+    return sessions[session_id]
+
+
+def _next_chunk(gen):
+    """Helper to get next chunk from generator"""
+    try:
+        return next(gen)
+    except StopIteration:
+        return None
+
+# --------------------------------------------------
+# API ENDPOINTS
+# --------------------------------------------------
+
+@app.get("/")
+async def root():
+    """Root endpoint"""
+    return {
+        "message": "Webpage Builder AI API",
+        "version": "1.0.0",
+        "endpoints": {
+            "stream": "POST /api/v1/stream - Unified streaming endpoint for all LLM interactions",
+            "get_page_types": "GET /api/v1/page-types",
+            "get_questionnaire": "GET /api/v1/questionnaire/{page_type_key}",
+            "get_latest_project": "GET /api/v1/latest-project",
+        }
+    }
+
+
+async def stream_events(request: StreamRequest) -> AsyncGenerator[str, None]:
+    """Unified streaming function that handles all LLM interactions - action is inferred from payload"""
+    # Auto-generate session_id if not provided
+    session_id = request.session_id or f"session_{int(time.time())}"
+    session = get_or_create_session(session_id)
+    
+    # Get model family from request (default to gemini for backward compatibility)
+    model_family = request.model_family.lower().strip() if request.model_family else "gemini"
+    
+    # Infer action from payload
+    # Priority: instruction -> modify, user_input with page_type -> generate, user_input only -> classify/generate, else error
+    if request.instruction:
+        action = "modify_project"
+    elif request.user_input:
+        if request.page_type_key or request.questionnaire_answers or request.wizard_inputs:
+            action = "generate_project"
+        else:
+            # Just user_input - could be classify_intent or chat, we'll determine in classify_intent flow
+            action = "classify_intent"
+    elif request.page_type_key or request.questionnaire_answers or request.wizard_inputs:
+        action = "generate_project"
+    else:
+        yield yield_error("validation", "Invalid request: must provide user_input, instruction, or page_type_key/questionnaire_answers")
+        return
+    
+    # Initialize event system
+    event_logger = get_event_logger()
+    project_id = f"proj_{int(time.time())}"
+    conversation_id = f"conv_{int(time.time())}"
+    emitter = EventEmitter(
+        project_id=project_id,
+        conversation_id=conversation_id,
+        callback=lambda event: event_logger.log_event(event)
+    )
+    
+    # Helper function to yield events in proper SSE format
+    def yield_event(event: EventEnvelope):
+        """Yield an event in proper SSE format according to contract"""
+        return f"data: {event.to_json()}\n\n"
+    
+    # Helper to create and yield error event
+    def yield_error(scope: str, message: str, details: Optional[str] = None):
+        """Create and yield an error event"""
+        from events import ErrorEvent
+        error_event = ErrorEvent.create(
+            scope=scope,
+            message=message,
+            details=details,
+            project_id=project_id,
+            conversation_id=conversation_id
+        )
+        return yield_event(error_event)
+    
+    try:
+        if action == "classify_intent":
+            if not request.user_input:
+                yield yield_error("validation", "user_input is required for classify_intent")
+                return
+            
+            user_input = request.user_input.strip()
+            chat_event = emitter.emit_chat_message(f"Analyzing your request: {user_input} (using {model_family})")
+            yield yield_event(chat_event)
+            
+            # Stream intent classification with model_family
+            thinking_start = emitter.emit_thinking_start()
+            yield yield_event(thinking_start)
+            
+            label, meta = classify_intent(user_input, model_family=model_family)
+            
+            thinking_end = emitter.emit_thinking_end(duration_ms=1000)
+            yield yield_event(thinking_end)
+            
+            # Emit classification result as chat message (contract doesn't have intent_classified event)
+            result_msg = f"Intent: {label} (confidence: {meta.get('confidence', 0):.2f})"
+            result_event = emitter.emit_chat_message(result_msg)
+            yield yield_event(result_event)
+            
+            if label == "greeting_only":
+                greeting = generate_greeting_response(user_input)
+                greeting_event = emitter.emit_chat_message(greeting)
+                yield yield_event(greeting_event)
+                complete_event = emitter.emit_stream_complete()
+                yield yield_event(complete_event)
+                return
+            
+            if label == "illegal":
+                illegal_event = emitter.emit_chat_message("Sorry — I can't help with that request.")
+                yield yield_event(illegal_event)
+                yield yield_error("llm", "Illegal request")
+                complete_event = emitter.emit_stream_complete()
+                yield yield_event(complete_event)
+                return
+            
+            if label == "chat":
+                smaller_model = get_smaller_model(model_family=model_family)
+                help_event = emitter.emit_chat_message("Let me help you with that...")
+                yield yield_event(help_event)
+                
+                thinking_start = emitter.emit_thinking_start()
+                yield yield_event(thinking_start)
+                
+                # Stream chat response - use edit.start for streaming chunks (contract allows multiple chunks)
+                from events import EditStartEvent
+                response_text = ""
+                loop = asyncio.get_event_loop()
+                stream_gen = generate_stream(user_input, model=smaller_model, model_family=model_family)
+                
+                while True:
+                    chunk = await loop.run_in_executor(None, _next_chunk, stream_gen)
+                    if chunk is None:
+                        break
+                    response_text += chunk
+                    # Use edit.start for streaming chunks (can be emitted multiple times per contract)
+                    edit_chunk = EditStartEvent.create(
+                        path="chat_response",
+                        content=chunk,
+                        project_id=project_id,
+                        conversation_id=conversation_id
+                    )
+                    yield yield_event(edit_chunk)
+                
+                thinking_end = emitter.emit_thinking_end(duration_ms=1000)
+                yield yield_event(thinking_end)
+                
+                # Emit final chat message with complete response
+                final_event = emitter.emit_chat_message(response_text)
+                yield yield_event(final_event)
+                
+                complete_event = emitter.emit_stream_complete()
+                yield yield_event(complete_event)
+                return
+            
+            if label == "webpage_build":
+                # Classify page type with model_family
+                page_type_msg = emitter.emit_chat_message("Determining the best page type for your project...")
+                yield yield_event(page_type_msg)
+                
+                thinking_start = emitter.emit_thinking_start()
+                yield yield_event(thinking_start)
+                
+                page_type_key, page_type_meta = classify_page_type(user_input, model_family=model_family)
+                
+                thinking_end = emitter.emit_thinking_end(duration_ms=1000)
+                yield yield_event(thinking_end)
+                
+                # Emit page type result as chat message
+                page_result_msg = f"Selected page type: {page_type_key}"
+                page_result_event = emitter.emit_chat_message(page_result_msg)
+                yield yield_event(page_result_event)
+                
+                # Analyze query detail with model_family
+                needs_followup, detail_confidence = analyze_query_detail(user_input, model_family=model_family)
+                
+                session["page_type_key"] = page_type_key
+                session["initial_intent"] = user_input
+                
+                page_type_config = get_page_type_by_key(page_type_key)
+                session["page_type_config"] = page_type_config
+                
+                if page_type_key == "generic":
+                    # Need page type selection - use UI multiselect event
+                    from events import UIMultiselectEvent
+                    categories = get_all_categories()
+                    options = [{"id": cat["key"], "label": cat["display_name"]} for cat in categories]
+                    multiselect_event = UIMultiselectEvent.create(
+                        select_id="page_type_selection",
+                        title="Please select a page type",
+                        options=options,
+                        project_id=project_id,
+                        conversation_id=conversation_id
+                    )
+                    yield yield_event(multiselect_event)
+                    await_input = emitter.emit_stream_await_input(reason="multiselect")
+                    yield yield_event(await_input)
+                    return
+                
+                if needs_followup and has_questionnaire(page_type_key):
+                    # Need questionnaire
+                    questionnaire = get_questionnaire(page_type_key)
+                    gather_msg = emitter.emit_chat_message("I need to gather some additional information to create the perfect page for you.")
+                    yield yield_event(gather_msg)
+                    
+                    # Emit questions using chat.question events (contract-compliant)
+                    type_mapping = {"radio": "mcq", "multiselect": "multi_select"}
+                    for question_data in questionnaire["questions"]:
+                        q_id = question_data["id"]
+                        q_text = question_data["question"]
+                        q_type = question_data["type"]
+                        options = question_data.get("options", [])
+                        
+                        contract_type = type_mapping.get(q_type, "open_ended")
+                        content = {}
+                        if contract_type in ["mcq", "multi_select"]:
+                            content["options"] = options
+                        
+                        question_event = emitter.emit_chat_question(
+                            q_id=q_id,
+                            question_type=contract_type,
+                            label=q_text,
+                            is_skippable=False,
+                            content=content
+                        )
+                        yield yield_event(question_event)
+                    
+                    await_input = emitter.emit_stream_await_input(reason="suggestion")
+                    yield yield_event(await_input)
+                    return
+                
+                # Ready to generate - emit as chat message
+                ready_msg = emitter.emit_chat_message(f"Ready to generate {page_type_key} project")
+                yield yield_event(ready_msg)
+                complete_event = emitter.emit_stream_complete()
+                yield yield_event(complete_event)
+                return
+        
+        elif action == "generate_project":
+            # Check if this is first-time request (with user_input) or follow-up (with page_type_key)
+            user_input = request.user_input
+            page_type_key = request.page_type_key or session.get("page_type_key")
+            questionnaire_answers = request.questionnaire_answers or session.get("questionnaire_answers", {})
+            wizard_inputs = request.wizard_inputs or WizardInputs()
+            
+            # If user_input is provided but no page_type_key, do classification flow first
+            if user_input and not page_type_key:
+                # This is the first request - classify intent and page type
+                user_input = user_input.strip()
+                analyze_msg = emitter.emit_chat_message(f"Analyzing your request: {user_input} (using {model_family})")
+                yield yield_event(analyze_msg)
+                
+                # Classify intent
+                thinking_start = emitter.emit_thinking_start()
+                yield yield_event(thinking_start)
+                
+                label, meta = classify_intent(user_input, model_family=model_family)
+                
+                thinking_end = emitter.emit_thinking_end(duration_ms=1000)
+                yield yield_event(thinking_end)
+                
+                if label != "webpage_build":
+                    if label == "greeting_only":
+                        greeting = generate_greeting_response(user_input)
+                        greeting_event = emitter.emit_chat_message(greeting)
+                        yield yield_event(greeting_event)
+                    elif label == "illegal":
+                        illegal_event = emitter.emit_chat_message("Sorry — I can't help with that request.")
+                        yield yield_event(illegal_event)
+                        yield yield_error("llm", "Illegal request")
+                    elif label == "chat":
+                        # Handle chat response
+                        smaller_model = get_smaller_model(model_family=model_family)
+                        help_msg = emitter.emit_chat_message("Let me help you with that...")
+                        yield yield_event(help_msg)
+                        
+                        thinking_start = emitter.emit_thinking_start()
+                        yield yield_event(thinking_start)
+                        
+                        from events import EditStartEvent
+                        response_text = ""
+                        loop = asyncio.get_event_loop()
+                        stream_gen = generate_stream(user_input, model=smaller_model, model_family=model_family)
+                        
+                        while True:
+                            chunk = await loop.run_in_executor(None, _next_chunk, stream_gen)
+                            if chunk is None:
+                                break
+                            response_text += chunk
+                            edit_chunk = EditStartEvent.create(
+                                path="chat_response",
+                                content=chunk,
+                                project_id=project_id,
+                                conversation_id=conversation_id
+                            )
+                            yield yield_event(edit_chunk)
+                        
+                        thinking_end = emitter.emit_thinking_end(duration_ms=1000)
+                        yield yield_event(thinking_end)
+                        
+                        final_msg = emitter.emit_chat_message(response_text)
+                        yield yield_event(final_msg)
+                    
+                    complete_event = emitter.emit_stream_complete()
+                    yield yield_event(complete_event)
+                    return
+                
+                # Intent is webpage_build - classify page type
+                page_type_msg = emitter.emit_chat_message("Determining the best page type for your project...")
+                yield yield_event(page_type_msg)
+                
+                thinking_start = emitter.emit_thinking_start()
+                yield yield_event(thinking_start)
+                
+                page_type_key, page_type_meta = classify_page_type(user_input, model_family=model_family)
+                
+                thinking_end = emitter.emit_thinking_end(duration_ms=1000)
+                yield yield_event(thinking_end)
+                
+                # Store in session
+                session["page_type_key"] = page_type_key
+                session["initial_intent"] = user_input
+                
+                page_type_config = get_page_type_by_key(page_type_key)
+                session["page_type_config"] = page_type_config
+                
+                # Emit page type result
+                page_result_msg = f"Selected page type: {page_type_key}"
+                page_result_event = emitter.emit_chat_message(page_result_msg)
+                yield yield_event(page_result_event)
+                
+                # Analyze if questionnaire is needed
+                needs_followup, detail_confidence = analyze_query_detail(user_input, model_family=model_family)
+                
+                if page_type_key == "generic":
+                    # Need page type selection
+                    from events import UIMultiselectEvent
+                    categories = get_all_categories()
+                    options = [{"id": cat["key"], "label": cat["display_name"]} for cat in categories]
+                    multiselect_event = UIMultiselectEvent.create(
+                        select_id="page_type_selection",
+                        title="Please select a page type",
+                        options=options,
+                        project_id=project_id,
+                        conversation_id=conversation_id
+                    )
+                    yield yield_event(multiselect_event)
+                    await_input = emitter.emit_stream_await_input(reason="multiselect")
+                    yield yield_event(await_input)
+                    return
+                
+                if needs_followup and has_questionnaire(page_type_key):
+                    # Need questionnaire
+                    questionnaire = get_questionnaire(page_type_key)
+                    gather_msg = emitter.emit_chat_message("I need to gather some additional information to create the perfect page for you.")
+                    yield yield_event(gather_msg)
+                    
+                    # Emit questions
+                    type_mapping = {"radio": "mcq", "multiselect": "multi_select"}
+                    for question_data in questionnaire["questions"]:
+                        q_id = question_data["id"]
+                        q_text = question_data["question"]
+                        q_type = question_data["type"]
+                        options = question_data.get("options", [])
+                        
+                        contract_type = type_mapping.get(q_type, "open_ended")
+                        content = {}
+                        if contract_type in ["mcq", "multi_select"]:
+                            content["options"] = options
+                        
+                        question_event = emitter.emit_chat_question(
+                            q_id=q_id,
+                            question_type=contract_type,
+                            label=q_text,
+                            is_skippable=False,
+                            content=content
+                        )
+                        yield yield_event(question_event)
+                    
+                    await_input = emitter.emit_stream_await_input(reason="suggestion")
+                    yield yield_event(await_input)
+                    return
+                
+                # Ready to generate - continue to generation below
+            
+            # Now proceed with project generation
+            if not page_type_key:
+                yield yield_error("validation", "page_type_key is required. Please provide user_input first or select a page type.")
+                return
+            
+            start_msg = emitter.emit_chat_message("Starting project generation...")
+            yield yield_event(start_msg)
+            
+            # Build prompt
+            base_prompt = (
+                "Return JSON only: React+Vite+TypeScript project. Schema: {\"project\": {\"name\": string, \"description\": string, \"files\": {...}, \"dirents\": {...}, \"meta\": {...}}}. Files: strings or {\"content\": \"...\"}.\n\n"
+                "🚨 REACT APP ONLY - NO STATIC HTML 🚨\n\n"
+                "REQUIRED:\n"
+                "1. React 18+ + TypeScript (.tsx only, NO .html pages)\n"
+                "2. Vite + @vitejs/plugin-react\n"
+                "3. Structure: src/main.tsx, src/App.tsx (React Router), src/pages/*.tsx, src/components/*.tsx, src/types/*.ts\n"
+                "4. package.json: React, React-DOM, Vite, TypeScript, react-router-dom\n"
+                "5. React Router: BrowserRouter, Routes, Route\n"
+                "6. Functional components + TypeScript interfaces\n"
+                "7. React hooks: useState, useEffect, useContext\n"
+                "8. Interactive: buttons/forms/nav work\n"
+                "9. Styling: CSS Modules/styled-components/Tailwind (NOT inline HTML styles)\n"
+                "10. index.html = entry only, all content via React\n\n"
+                "FORBIDDEN: Static HTML pages, plain HTML/CSS, image-only layouts, missing Router/TypeScript.\n"
+            )
+            
+            if page_type_key:
+                page_type_config = get_page_type_by_key(page_type_key)
+                if page_type_config:
+                    base_prompt += f"\n=== PAGE TYPE: {page_type_config['name']} ({page_type_config['category']}) ===\n"
+                    base_prompt += f"Target User: {page_type_config['end_user']}\n\n"
+                    base_prompt += "REQUIRED CORE PAGES:\n"
+                    for i, page in enumerate(page_type_config['core_pages'], 1):
+                        base_prompt += f"{i}. {page}\n"
+                    base_prompt += "\n\nREQUIRED COMPONENTS TO IMPLEMENT:\n"
+                    for i, component in enumerate(page_type_config['components'], 1):
+                        base_prompt += f"{i}. **{component['name']}**: {component['description']}\n"
+            
+            if questionnaire_answers:
+                base_prompt += "\n=== USER REQUIREMENTS (from questionnaire) ===\n"
+                for key, value in questionnaire_answers.items():
+                    if isinstance(value, list):
+                        base_prompt += f"- {key}\n  Selected: {', '.join(value)}\n"
+                    else:
+                        base_prompt += f"- {key}\n  Answer: {value}\n"
+            
+            wizard_data = wizard_inputs.dict()
+            final_prompt = base_prompt + "USER_FIELDS:\n" + json.dumps(wizard_data, ensure_ascii=False)
+            
+            # Get default model for the specified family
+            from models.model_factory import get_provider
+            try:
+                provider = get_provider(model_family)
+                webpage_model = provider.get_default_model()
+            except Exception as e:
+                yield yield_error("llm", f"Failed to initialize {model_family} provider: {str(e)}")
+                return
+            
+            progress_init = emitter.emit_progress_init(
+                steps=[
+                    {"id": "prepare", "label": "Preparing", "status": "in_progress"},
+                    {"id": "generate", "label": "Generating", "status": "pending"},
+                    {"id": "parse", "label": "Parsing", "status": "pending"},
+                    {"id": "save", "label": "Saving", "status": "pending"},
+                ],
+                mode="inline"
+            )
+            yield yield_event(progress_init)
+            
+            progress_prepare = emitter.emit_progress_update("prepare", "completed")
+            yield yield_event(progress_prepare)
+            
+            progress_generate = emitter.emit_progress_update("generate", "in_progress")
+            yield yield_event(progress_generate)
+            
+            thinking_start = emitter.emit_thinking_start()
+            yield yield_event(thinking_start)
+            
+            gen_msg = emitter.emit_chat_message(f"Generating project using {webpage_model} ({model_family})...")
+            yield yield_event(gen_msg)
+            start_time = time.time()
+            
+            # Stream the generation - use edit.start for streaming chunks
+            from events import EditStartEvent
+            output = ""
+            loop = asyncio.get_event_loop()
+            stream_gen = generate_stream(final_prompt, model=webpage_model, model_family=model_family)
+            
+            while True:
+                chunk = await loop.run_in_executor(None, _next_chunk, stream_gen)
+                if chunk is None:
+                    break
+                output += chunk
+                # Use edit.start for streaming generation chunks
+                edit_chunk = EditStartEvent.create(
+                    path="project_generation",
+                    content=chunk,
+                    project_id=project_id,
+                    conversation_id=conversation_id
+                )
+                yield yield_event(edit_chunk)
+            
+            elapsed_time = time.time() - start_time
+            thinking_end = emitter.emit_thinking_end(duration_ms=int(elapsed_time * 1000))
+            yield yield_event(thinking_end)
+            
+            progress_gen_complete = emitter.emit_progress_update("generate", "completed")
+            yield yield_event(progress_gen_complete)
+            
+            progress_parse = emitter.emit_progress_update("parse", "in_progress")
+            yield yield_event(progress_parse)
+            
+            if not output or len(output) < 100:
+                raise Exception("Model returned empty or very short output")
+            
+            project = parse_project_json(output)
+            
+            if not project:
+                parse_failed = emitter.emit_progress_update("parse", "failed")
+                yield yield_event(parse_failed)
+                
+                error_event = emitter.emit_error(
+                    scope="validation",
+                    message="Failed to parse JSON from model output",
+                    details="The model may have returned invalid JSON or non-JSON content.",
+                    actions=["retry", "ask_user"]
+                )
+                yield yield_event(error_event)
+                
+                stream_failed = emitter.emit_stream_failed()
+                yield yield_event(stream_failed)
+                return
+            
+            parse_complete = emitter.emit_progress_update("parse", "completed")
+            yield yield_event(parse_complete)
+            
+            save_progress = emitter.emit_progress_update("save", "in_progress")
+            yield yield_event(save_progress)
+            
+            parsed_msg = emitter.emit_chat_message(f"JSON parsed successfully. Project has {len(project.get('files', {}))} files.")
+            yield yield_event(parsed_msg)
+            
+            # Save project
+            project_json_path = f"{OUTPUT_DIR}/project.json"
+            with open(project_json_path, "w") as f:
+                json.dump({"project": project}, f, indent=2)
+            
+            emitter.emit_fs_write(
+                path="project.json",
+                kind="file",
+                language="json",
+                content=json.dumps({"project": project}, indent=2)
+            )
+            
+            # Save all files
+            files = project.get('files', {})
+            for file_path, file_content in files.items():
+                if isinstance(file_content, dict):
+                    content = file_content.get('content', '')
+                    language = file_content.get('language', None)
+                else:
+                    content = file_content
+                    language = None
+                
+                if not language:
+                    if file_path.endswith('.tsx') or file_path.endswith('.ts'):
+                        language = 'typescript'
+                    elif file_path.endswith('.jsx') or file_path.endswith('.js'):
+                        language = 'javascript'
+                    elif file_path.endswith('.css'):
+                        language = 'css'
+                    elif file_path.endswith('.json'):
+                        language = 'json'
+                    elif file_path.endswith('.html'):
+                        language = 'html'
+                
+                emitter.emit_fs_write(
+                    path=file_path,
+                    kind="file",
+                    language=language,
+                    content=content if isinstance(content, str) else json.dumps(content)
+                )
+            
+            save_project_files(project, f"{OUTPUT_DIR}/project")
+            
+            save_complete = emitter.emit_progress_update("save", "completed")
+            yield yield_event(save_complete)
+            
+            success_msg = emitter.emit_chat_message("Base project generated successfully!")
+            yield yield_event(success_msg)
+            
+            complete_event = emitter.emit_stream_complete()
+            yield yield_event(complete_event)
+            return
+        
+        elif action == "modify_project":
+            if not request.instruction:
+                yield yield_error("validation", "instruction is required for modify_project")
+                return
+            
+            base_path = request.base_project_path or session.get("last_project_path")
+            if not base_path:
+                base_path, _ = get_latest_project()
+            
+            if not base_path or not os.path.exists(base_path):
+                yield yield_error("validation", "Base project not found")
+                return
+            
+            with open(base_path) as f:
+                base_project = json.load(f)["project"]
+            
+            complexity, complexity_meta = classify_modification_complexity(request.instruction, model_family=model_family)
+            mod_model = get_model_for_complexity(complexity, model_family=model_family)
+            
+            mod_prompt = f"""Modify project JSON. Return JSON only: {{"project": {{...}}}}. Match base schema. Change ONLY requested parts, keep rest unchanged. NO markdown/code blocks/explanations. Raw JSON only.
+
+Base: {json.dumps({"project": base_project}, indent=2)}
+Request: {request.instruction}"""
+            
+            mod_msg = emitter.emit_chat_message(f"Modifying project (complexity: {complexity})...")
+            yield yield_event(mod_msg)
+            
+            thinking_start = emitter.emit_thinking_start()
+            yield yield_event(thinking_start)
+            
+            # Stream modification - use edit.start for streaming chunks
+            from events import EditStartEvent
+            mod_out = ""
+            loop = asyncio.get_event_loop()
+            stream_gen = generate_stream(mod_prompt, model=mod_model, model_family=model_family)
+            
+            while True:
+                chunk = await loop.run_in_executor(None, _next_chunk, stream_gen)
+                if chunk is None:
+                    break
+                mod_out += chunk
+                # Use edit.start for streaming modification chunks
+                edit_chunk = EditStartEvent.create(
+                    path="project_modification",
+                    content=chunk,
+                    project_id=project_id,
+                    conversation_id=conversation_id
+                )
+                yield yield_event(edit_chunk)
+            
+            thinking_end = emitter.emit_thinking_end(duration_ms=1000)
+            yield yield_event(thinking_end)
+            
+            mod_project = parse_project_json(mod_out)
+            
+            if not mod_project:
+                # Retry with default model for the family
+                from models.model_factory import get_provider
+                provider = get_provider(model_family)
+                default_model = provider.get_default_model()
+                if mod_model != default_model:
+                    mod_out = ""
+                    stream_gen = generate_stream(mod_prompt, model=default_model, model_family=model_family)
+                    while True:
+                        chunk = await loop.run_in_executor(None, _next_chunk, stream_gen)
+                        if chunk is None:
+                            break
+                        mod_out += chunk
+                        # Use edit.start for streaming modification chunks
+                        edit_chunk = EditStartEvent.create(
+                            path="project_modification",
+                            content=chunk,
+                            project_id=project_id,
+                            conversation_id=conversation_id
+                        )
+                        yield yield_event(edit_chunk)
+                    mod_project = parse_project_json(mod_out)
+            
+            if not mod_project:
+                yield yield_error("validation", "Invalid modification output")
+                return
+            
+            # Save modified project
+            version = f"project_{int(time.time())}"
+            dest = os.path.join(MODIFIED_DIR, version)
+            os.makedirs(dest, exist_ok=True)
+            
+            project_json_path = os.path.join(dest, "project.json")
+            with open(project_json_path, "w") as f:
+                json.dump({"project": mod_project}, f, indent=2)
+            
+            save_project_files(mod_project, os.path.join(dest, "project"))
+            
+            session["last_project_path"] = project_json_path
+            
+            # Emit filesystem events for modified files
+            files = mod_project.get('files', {})
+            for file_path, file_content in files.items():
+                if isinstance(file_content, dict):
+                    content = file_content.get('content', '')
+                    language = file_content.get('language', None)
+                else:
+                    content = file_content
+                    language = None
+                
+                if not language:
+                    if file_path.endswith('.tsx') or file_path.endswith('.ts'):
+                        language = 'typescript'
+                    elif file_path.endswith('.jsx') or file_path.endswith('.js'):
+                        language = 'javascript'
+                    elif file_path.endswith('.css'):
+                        language = 'css'
+                    elif file_path.endswith('.json'):
+                        language = 'json'
+                
+                fs_write = emitter.emit_fs_write(
+                    path=file_path,
+                    kind="file",
+                    language=language,
+                    content=content if isinstance(content, str) else json.dumps(content)
+                )
+                yield yield_event(fs_write)
+            
+            complete_msg = emitter.emit_chat_message(f"Project modified successfully! {len(files)} files updated.")
+            yield yield_event(complete_msg)
+            
+            complete_event = emitter.emit_stream_complete()
+            yield yield_event(complete_event)
+            return
+        
+        elif action == "chat":
+            if not request.user_input:
+                yield yield_error("validation", "user_input is required for chat")
+                return
+            
+            user_input = request.user_input.strip()
+            smaller_model = get_smaller_model(model_family=model_family)
+            help_msg = emitter.emit_chat_message("Let me help you with that...")
+            yield yield_event(help_msg)
+            
+            thinking_start = emitter.emit_thinking_start()
+            yield yield_event(thinking_start)
+            
+            # Stream chat response - use edit.start for streaming chunks
+            from events import EditStartEvent
+            response_text = ""
+            loop = asyncio.get_event_loop()
+            stream_gen = generate_stream(user_input, model=smaller_model, model_family=model_family)
+            
+            while True:
+                chunk = await loop.run_in_executor(None, _next_chunk, stream_gen)
+                if chunk is None:
+                    break
+                response_text += chunk
+                # Use edit.start for streaming chat chunks
+                edit_chunk = EditStartEvent.create(
+                    path="chat_response",
+                    content=chunk,
+                    project_id=project_id,
+                    conversation_id=conversation_id
+                )
+                yield yield_event(edit_chunk)
+            
+            thinking_end = emitter.emit_thinking_end(duration_ms=1000)
+            yield yield_event(thinking_end)
+            
+            final_msg = emitter.emit_chat_message(response_text)
+            yield yield_event(final_msg)
+            
+            complete_event = emitter.emit_stream_complete()
+            yield yield_event(complete_event)
+            return
+        
+        else:
+            yield yield_error("validation", f"Could not determine action from payload")
+    
+    except Exception as e:
+        error_msg = str(e)
+        error_event = emitter.emit_error(scope="runtime", message=error_msg)
+        yield yield_event(error_event)
+        stream_failed = emitter.emit_stream_failed()
+        yield yield_event(stream_failed)
+
+
+@app.post("/api/v1/stream")
+async def stream_endpoint(request: StreamRequest):
+    """Unified streaming endpoint for all LLM interactions"""
+    return StreamingResponse(
+        stream_events(request),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
+
+@app.post("/api/v1/classify-intent", response_model=IntentResponse)
+async def classify_intent_endpoint(request: IntentRequest):
+    """Classify user intent and return appropriate response"""
+    user_input = request.user_input.strip()
+    
+    if not user_input:
+        raise HTTPException(status_code=400, detail="User input cannot be empty")
+    
+    # Classify intent (default to gemini for backward compatibility)
+    model_family = getattr(request, 'model_family', 'gemini') if hasattr(request, 'model_family') else 'gemini'
+    label, meta = classify_intent(user_input, model_family=model_family)
+    log(f"[CLASSIFY] label={label} meta={meta} model_family={model_family}")
+    
+    response = IntentResponse(
+        label=label,
+        meta=meta
+    )
+    
+    if label == "greeting_only":
+        response.greeting_response = generate_greeting_response(user_input)
+        return response
+    
+    if label == "illegal":
+        raise HTTPException(status_code=403, detail="Sorry — I can't help with that request.")
+    
+    if label == "chat":
+        smaller_model = get_smaller_model(model_family=model_family)
+        response.chat_response = chat_response(user_input, model_family=model_family)
+        response.meta["model"] = smaller_model
+        response.meta["model_family"] = model_family
+        return response
+    
+    if label == "webpage_build":
+        # Classify page type
+        page_type_key, page_type_meta = classify_page_type(user_input, model_family=model_family)
+        log(f"[PAGE_TYPE] key={page_type_key} meta={page_type_meta}")
+        response.page_type_key = page_type_key
+        response.page_type_meta = page_type_meta
+        
+        # Analyze if query needs follow-up questions
+        needs_followup, detail_confidence = analyze_query_detail(user_input, model_family=model_family)
+        log(f"[DETAIL_ANALYSIS] needs_followup={needs_followup} confidence={detail_confidence}")
+        
+        if page_type_key == "generic":
+            response.needs_page_type_selection = True
+        elif needs_followup and has_questionnaire(page_type_key):
+            response.needs_questionnaire = True
+        else:
+            response.needs_questionnaire = False
+        
+        return response
+    
+    raise HTTPException(status_code=400, detail="I didn't fully understand — please clarify.")
+
+
+@app.get("/api/v1/page-types")
+async def get_page_types():
+    """Get all available page types/categories"""
+    categories = get_all_categories()
+    return {"categories": categories}
+
+
+@app.get("/api/v1/questionnaire/{page_type_key}")
+async def get_questionnaire_endpoint(page_type_key: str):
+    """Get questionnaire for a specific page type"""
+    if not has_questionnaire(page_type_key):
+        return {"has_questionnaire": False, "questionnaire": None}
+    
+    questionnaire = get_questionnaire(page_type_key)
+    return {
+        "has_questionnaire": True,
+        "questionnaire": questionnaire
+    }
+
+
+@app.post("/api/v1/generate-project", response_model=ProjectResponse)
+async def generate_project_endpoint(request: GenerateProjectRequest, background_tasks: BackgroundTasks):
+    """Generate a project based on user inputs"""
+    session = get_or_create_session(request.session_id)
+    
+    # Initialize event system
+    event_logger = get_event_logger()
+    project_id = f"proj_{int(time.time())}"
+    conversation_id = f"conv_{int(time.time())}"
+    emitter = EventEmitter(
+        project_id=project_id,
+        conversation_id=conversation_id,
+        callback=lambda event: event_logger.log_event(event)
+    )
+    
+    # Emit initial events
+    emitter.emit_chat_message("Starting project generation...")
+    
+    # Build the prompt
+    base_prompt = (
+        "Return JSON only: React+Vite+TypeScript project. Schema: {\"project\": {\"name\": string, \"description\": string, \"files\": {...}, \"dirents\": {...}, \"meta\": {...}}}. Files: strings or {\"content\": \"...\"}.\n\n"
+        
+        "🚨 REACT APP ONLY - NO STATIC HTML 🚨\n\n"
+        
+        "REQUIRED:\n"
+        "1. React 18+ + TypeScript (.tsx only, NO .html pages)\n"
+        "2. Vite + @vitejs/plugin-react\n"
+        "3. Structure: src/main.tsx, src/App.tsx (React Router), src/pages/*.tsx, src/components/*.tsx, src/types/*.ts\n"
+        "4. package.json: React, React-DOM, Vite, TypeScript, react-router-dom\n"
+        "5. React Router: BrowserRouter, Routes, Route\n"
+        "6. Functional components + TypeScript interfaces\n"
+        "7. React hooks: useState, useEffect, useContext\n"
+        "8. Interactive: buttons/forms/nav work\n"
+        "9. Styling: CSS Modules/styled-components/Tailwind (NOT inline HTML styles)\n"
+        "10. index.html = entry only, all content via React\n\n"
+        
+        "FORBIDDEN: Static HTML pages, plain HTML/CSS, image-only layouts, missing Router/TypeScript.\n"
+    )
+    
+    # Add page type specific requirements
+    page_type_key = request.page_type_key or session.get("page_type_key")
+    if page_type_key:
+        page_type_config = get_page_type_by_key(page_type_key)
+        if page_type_config:
+            emitter.emit_chat_message(f"Configuring {page_type_config['name']} requirements...")
+            
+            base_prompt += f"\n=== PAGE TYPE: {page_type_config['name']} ({page_type_config['category']}) ===\n"
+            base_prompt += f"Target User: {page_type_config['end_user']}\n\n"
+            
+            base_prompt += "REQUIRED CORE PAGES:\n"
+            for i, page in enumerate(page_type_config['core_pages'], 1):
+                base_prompt += f"{i}. {page}\n"
+            
+            base_prompt += "\n\nREQUIRED COMPONENTS TO IMPLEMENT:\n"
+            for i, component in enumerate(page_type_config['components'], 1):
+                base_prompt += f"{i}. **{component['name']}**: {component['description']}\n"
+            
+            if "Auth Module" in page_type_config.get('core_pages', []):
+                base_prompt += "\n\nAUTHENTICATION NOTE:\n"
+                base_prompt += "- For 'Auth Module', create a SIMPLE login page (no backend required)\n"
+                base_prompt += "- Use mock authentication (hardcoded credentials or localStorage)\n"
+                base_prompt += "- Focus on the UI/UX, not complex auth flows\n"
+                base_prompt += "- The main app should be accessible after simple login\n"
+                base_prompt += "- Skip complex features like password reset, email verification, OAuth for now\n\n"
+            
+            base_prompt += "\n\nIMPORTANT: Implement ALL core pages and components. Each must be fully functional React components with TypeScript. Include proper routing.\n\n"
+    
+    # Add questionnaire answers if available
+    questionnaire_answers = request.questionnaire_answers or session.get("questionnaire_answers", {})
+    if questionnaire_answers:
+        base_prompt += "\n=== USER REQUIREMENTS (from questionnaire) ===\n"
+        for key, value in questionnaire_answers.items():
+            if isinstance(value, list):
+                formatted_value = ', '.join(value)
+                base_prompt += f"- {key}\n  Selected: {formatted_value}\n"
+            else:
+                base_prompt += f"- {key}\n  Answer: {value}\n"
+        base_prompt += "\nIMPORTANT: Use these specific requirements to tailor the design, content, features, and functionality.\n\n"
+    
+    # Add wizard inputs
+    wizard_data = request.wizard_inputs.dict()
+    final_prompt = base_prompt + "USER_FIELDS:\n" + json.dumps(wizard_data, ensure_ascii=False)
+    
+    # Get default model for the specified family
+    from models.model_factory import get_provider
+    try:
+        provider = get_provider(model_family)
+        webpage_model = provider.get_default_model()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to initialize {model_family} provider: {str(e)}")
+    
+    emitter.emit_progress_init(
+        steps=[
+            {"id": "prepare", "label": "Preparing", "status": "in_progress"},
+            {"id": "generate", "label": "Generating", "status": "pending"},
+            {"id": "parse", "label": "Parsing", "status": "pending"},
+            {"id": "save", "label": "Saving", "status": "pending"},
+        ],
+        mode="inline"
+    )
+    
+    emitter.emit_progress_update("prepare", "completed")
+    emitter.emit_progress_update("generate", "in_progress")
+    emitter.emit_thinking_start()
+    
+    start_time = time.time()
+    
+    try:
+        emitter.emit_chat_message(f"Generating project using {webpage_model} ({model_family})...")
+        output = generate_text(final_prompt, model=webpage_model, model_family=model_family, fallback_models=None)
+        elapsed_time = time.time() - start_time
+        emitter.emit_thinking_end(duration_ms=int(elapsed_time * 1000))
+        emitter.emit_progress_update("generate", "completed")
+        emitter.emit_progress_update("parse", "in_progress")
+        
+        if not output or len(output) < 100:
+            raise HTTPException(status_code=500, detail="Model returned empty or very short output")
+        
+        project = parse_project_json(output)
+        
+        if not project:
+            emitter.emit_progress_update("parse", "failed")
+            emitter.emit_error(
+                scope="validation",
+                message="Failed to parse JSON from model output",
+                details="The model may have returned invalid JSON or non-JSON content.",
+                actions=["retry", "ask_user"]
+            )
+            emitter.emit_stream_failed()
+            raise HTTPException(status_code=500, detail="Failed to parse JSON from model output")
+        
+        emitter.emit_progress_update("parse", "completed")
+        emitter.emit_progress_update("save", "in_progress")
+        emitter.emit_chat_message(f"JSON parsed successfully. Project has {len(project.get('files', {}))} files.")
+        
+        # Save project
+        project_json_path = f"{OUTPUT_DIR}/project.json"
+        with open(project_json_path, "w") as f:
+            json.dump({"project": project}, f, indent=2)
+        
+        emitter.emit_fs_write(
+            path="project.json",
+            kind="file",
+            language="json",
+            content=json.dumps({"project": project}, indent=2)
+        )
+        
+        # Save all files
+        files = project.get('files', {})
+        for file_path, file_content in files.items():
+            if isinstance(file_content, dict):
+                content = file_content.get('content', '')
+                language = file_content.get('language', None)
+            else:
+                content = file_content
+                language = None
+            
+            if not language:
+                if file_path.endswith('.tsx') or file_path.endswith('.ts'):
+                    language = 'typescript'
+                elif file_path.endswith('.jsx') or file_path.endswith('.js'):
+                    language = 'javascript'
+                elif file_path.endswith('.css'):
+                    language = 'css'
+                elif file_path.endswith('.json'):
+                    language = 'json'
+                elif file_path.endswith('.html'):
+                    language = 'html'
+            
+            emitter.emit_fs_write(
+                path=file_path,
+                kind="file",
+                language=language,
+                content=content if isinstance(content, str) else json.dumps(content)
+            )
+        
+        save_project_files(project, f"{OUTPUT_DIR}/project")
+        
+        emitter.emit_progress_update("save", "completed")
+        emitter.emit_chat_message("Base project generated successfully!")
+        emitter.emit_stream_complete()
+        
+        events_file = f"{OUTPUT_DIR}/events.jsonl"
+        
+        return ProjectResponse(
+            success=True,
+            project_path=f"{OUTPUT_DIR}/project",
+            project_json_path=project_json_path,
+            files_count=len(files),
+            message="Base project generated successfully!",
+            events_file=events_file if os.path.exists(events_file) else None
+        )
+        
+    except Exception as e:
+        error_msg = str(e)
+        if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg or "Rate limit" in error_msg:
+            raise HTTPException(
+                status_code=429,
+                detail="Rate limit exceeded. Please wait a few minutes and try again."
+            )
+        raise HTTPException(status_code=500, detail=f"Error during generation: {error_msg}")
+
+
+@app.post("/api/v1/modify-project", response_model=ProjectResponse)
+async def modify_project_endpoint(request: ModifyProjectRequest):
+    """Modify an existing project"""
+    session = get_or_create_session(request.session_id)
+    
+    # Get base project
+    base_path = request.base_project_path or session.get("last_project_path")
+    if not base_path:
+        base_path, _ = get_latest_project()
+    
+    if not base_path or not os.path.exists(base_path):
+        raise HTTPException(status_code=404, detail="Base project not found")
+    
+    with open(base_path) as f:
+        base_project = json.load(f)["project"]
+    
+    # Get model_family from request
+    model_family = getattr(request, 'model_family', 'gemini') if hasattr(request, 'model_family') else 'gemini'
+    
+    # Classify modification complexity
+    complexity, complexity_meta = classify_modification_complexity(request.instruction, model_family=model_family)
+    mod_model = get_model_for_complexity(complexity, model_family=model_family)
+    
+    mod_prompt = f"""Modify project JSON. Return JSON only: {{"project": {{...}}}}. Match base schema. Change ONLY requested parts, keep rest unchanged. NO markdown/code blocks/explanations. Raw JSON only.
+
+Base: {json.dumps({"project": base_project}, indent=2)}
+Request: {request.instruction}"""
+    
+    try:
+        mod_out = generate_text(mod_prompt, model=mod_model, model_family=model_family)
+        mod_project = parse_project_json(mod_out)
+        
+        if not mod_project:
+            # Retry with default model for the family if smaller model failed
+            from models.model_factory import get_provider
+            provider = get_provider(model_family)
+            default_model = provider.get_default_model()
+            if mod_model != default_model:
+                mod_out = generate_text(mod_prompt, model=default_model, model_family=model_family)
+                mod_project = parse_project_json(mod_out)
+            
+            if not mod_project:
+                raise HTTPException(status_code=500, detail="Invalid modification output - model did not return valid JSON")
+        
+        # Validate structure
+        if not isinstance(mod_project, dict) or "files" not in mod_project:
+            raise HTTPException(status_code=500, detail="Invalid project structure")
+        
+        # Save modified project
+        version = f"project_{int(time.time())}"
+        dest = os.path.join(MODIFIED_DIR, version)
+        os.makedirs(dest, exist_ok=True)
+        
+        project_json_path = os.path.join(dest, "project.json")
+        with open(project_json_path, "w") as f:
+            json.dump({"project": mod_project}, f, indent=2)
+        
+        save_project_files(mod_project, os.path.join(dest, "project"))
+        
+        session["last_project_path"] = project_json_path
+        session["history"]["modifications"].append({
+            "instruction": request.instruction,
+            "from": base_path,
+            "to": dest,
+        })
+        
+        return ProjectResponse(
+            success=True,
+            project_path=os.path.join(dest, "project"),
+            project_json_path=project_json_path,
+            files_count=len(mod_project.get('files', {})),
+            message="Modification saved successfully!",
+            events_file=None
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        error_msg = str(e)
+        if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg or "Rate limit" in error_msg:
+            raise HTTPException(
+                status_code=429,
+                detail="Rate limit exceeded. Please wait a few minutes and try again."
+            )
+        raise HTTPException(status_code=500, detail=f"Error during modification: {error_msg}")
+
+
+@app.get("/api/v1/latest-project")
+async def get_latest_project_endpoint():
+    """Get the latest generated project"""
+    base_path, base_project = get_latest_project()
+    
+    if not base_path:
+        raise HTTPException(status_code=404, detail="No project found")
+    
+    return {
+        "project_path": base_path,
+        "project": base_project
+    }
+
+
+@app.get("/api/v1/health")
+async def health_check():
+    """Health check endpoint"""
+    return {"status": "healthy"}
+

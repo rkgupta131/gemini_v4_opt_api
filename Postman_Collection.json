@@ -1,0 +1,697 @@
+{
+	"info": {
+		"name": "Webpage Builder AI API - Contract-Compliant Streaming",
+		"description": "Unified streaming API supporting Gemini, GPT, and Claude model families. All events follow Phase 1 LLM Streaming Contract format with Universal Event Envelope structure.",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"_postman_id": "webpage-builder-api-v1-contract",
+		"version": {
+			"major": 2,
+			"minor": 0
+		}
+	},
+	"item": [
+		{
+			"name": "Streaming Endpoints",
+			"description": "All streaming endpoints support model_family parameter (gemini, gpt, claude) and return events in Phase 1 LLM Streaming Contract format.\n\nAction is inferred from payload:\n- `user_input` only → classify intent\n- `user_input` + `page_type_key`/`questionnaire_answers` → generate project\n- `instruction` → modify project\n- `page_type_key`/`questionnaire_answers` only → generate project (follow-up)\n\nSession ID is optional and auto-generated if not provided.",
+			"item": [
+				{
+					"name": "Classify Intent - Gemini",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"model_family\": \"gemini\",\n  \"user_input\": \"I want to build an e-commerce website\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/stream",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"stream"
+							]
+						},
+						"description": "Classify user intent using Gemini. Returns contract-compliant events:\n- `chat.message` - Status messages\n- `thinking.start` / `thinking.end` - Thinking indicators\n- `chat.message` - Intent result\n- `chat.question` - Questions if questionnaire needed\n- `ui.multiselect` - Page type selection if needed\n- `stream.complete` / `stream.await_input` - Terminal events"
+					},
+					"response": []
+				},
+				{
+					"name": "Classify Intent - GPT",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"model_family\": \"gpt\",\n  \"user_input\": \"I want to build an e-commerce website\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/stream",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"stream"
+							]
+						},
+						"description": "Classify user intent using GPT. Returns contract-compliant events."
+					},
+					"response": []
+				},
+				{
+					"name": "Classify Intent - Claude",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"model_family\": \"claude\",\n  \"user_input\": \"I want to build an e-commerce website\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/stream",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"stream"
+							]
+						},
+						"description": "Classify user intent using Claude. Returns contract-compliant events."
+					},
+					"response": []
+				},
+				{
+					"name": "Chat - Gemini",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"model_family\": \"gemini\",\n  \"user_input\": \"What is React and how does it work?\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/stream",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"stream"
+							]
+						},
+						"description": "Chat with AI using Gemini. Returns:\n- `chat.message` - Initial message\n- `thinking.start` - Thinking indicator\n- `edit.start` - Streaming response chunks (multiple)\n- `thinking.end` - Thinking complete\n- `chat.message` - Final complete response\n- `stream.complete` - Stream finished"
+					},
+					"response": []
+				},
+				{
+					"name": "Chat - GPT",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"model_family\": \"gpt\",\n  \"user_input\": \"What is React and how does it work?\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/stream",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"stream"
+							]
+						},
+						"description": "Chat with AI using GPT. Returns contract-compliant streaming events."
+					},
+					"response": []
+				},
+				{
+					"name": "Chat - Claude",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"model_family\": \"claude\",\n  \"user_input\": \"What is React and how does it work?\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/stream",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"stream"
+							]
+						},
+						"description": "Chat with AI using Claude. Returns contract-compliant streaming events."
+					},
+					"response": []
+				},
+				{
+					"name": "Generate Project - First Request (Gemini)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"model_family\": \"gemini\",\n  \"user_input\": \"I want to build an e-commerce website\",\n  \"project_id\": \"proj_123\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/stream",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"stream"
+							]
+						},
+						"description": "First request to generate project. Action is inferred from payload (user_input = generate_project).\n\nPayload: Only requires `user_input`, `model_family`, and optional `project_id`.\n\nSystem will:\n1. Classify intent\n2. Classify page type\n3. Ask questions if needed (via chat.question events)\n4. Wait for user input (stream.await_input)\n\nReturns:\n- `chat.message` - Status messages\n- `thinking.start` / `thinking.end` - Thinking indicators\n- `chat.question` - Questions if questionnaire needed\n- `ui.multiselect` - Page type selection if generic\n- `stream.await_input` - Waiting for user response"
+					},
+					"response": []
+				},
+				{
+					"name": "Generate Project - Follow-up (Gemini)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"model_family\": \"gemini\",\n  \"page_type_key\": \"ecommerce\",\n  \"questionnaire_answers\": {\n    \"target_audience\": \"young_adults\",\n    \"product_categories\": [\n      \"electronics\",\n      \"clothing\"\n    ],\n    \"payment_methods\": \"credit_card\"\n  },\n  \"wizard_inputs\": {\n    \"hero_text\": \"Welcome to our store\",\n    \"subtext\": \"Best products at best prices\",\n    \"cta\": \"Shop Now\",\n    \"theme\": \"Light\"\n  }\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/stream",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"stream"
+							]
+						},
+						"description": "Follow-up request after questions answered. Action is inferred from payload (page_type_key/questionnaire_answers = generate_project).\n\nPayload: Requires `page_type_key`, `questionnaire_answers`, and `wizard_inputs`.\n\nReturns:\n- `chat.message` - Status messages\n- `progress.init` - Progress initialization\n- `progress.update` - Step updates\n- `thinking.start` / `thinking.end` - Thinking indicators\n- `edit.start` - Streaming generation chunks (multiple)\n- `fs.write` - File writes (single source of truth)\n- `stream.complete` - Generation finished"
+					},
+					"response": []
+				},
+				{
+					"name": "Generate Project - First Request (GPT)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"model_family\": \"gpt\",\n  \"user_input\": \"I want to build an e-commerce website\",\n  \"project_id\": \"proj_123\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/stream",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"stream"
+							]
+						},
+						"description": "First request to generate project using GPT. Only requires user_input, session_id, model_family, and optional project_id."
+					},
+					"response": []
+				},
+				{
+					"name": "Generate Project - First Request (Claude)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"model_family\": \"claude\",\n  \"user_input\": \"I want to build an e-commerce website\",\n  \"project_id\": \"proj_123\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/stream",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"stream"
+							]
+						},
+						"description": "First request to generate project using Claude. Only requires user_input, session_id, model_family, and optional project_id."
+					},
+					"response": []
+				},
+				{
+					"name": "Generate Project (With Questionnaire) - Gemini",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"model_family\": \"gemini\",\n  \"page_type_key\": \"ecommerce\",\n  \"questionnaire_answers\": {\n    \"target_audience\": \"young_adults\",\n    \"product_categories\": [\n      \"electronics\",\n      \"clothing\"\n    ],\n    \"payment_methods\": \"credit_card\"\n  },\n  \"wizard_inputs\": {\n    \"hero_text\": \"Welcome to our store\",\n    \"subtext\": \"Best products at best prices\",\n    \"cta\": \"Shop Now\",\n    \"theme\": \"Dark\"\n  }\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/stream",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"stream"
+							]
+						},
+						"description": "Generate a project using Gemini with questionnaire answers. Use this after answering questions from classify_intent."
+					},
+					"response": []
+				},
+				{
+					"name": "Generate Project (With Questionnaire) - GPT",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"model_family\": \"gpt\",\n  \"page_type_key\": \"ecommerce\",\n  \"questionnaire_answers\": {\n    \"target_audience\": \"young_adults\",\n    \"product_categories\": [\n      \"electronics\",\n      \"clothing\"\n    ],\n    \"payment_methods\": \"credit_card\"\n  },\n  \"wizard_inputs\": {\n    \"hero_text\": \"Welcome to our store\",\n    \"subtext\": \"Best products at best prices\",\n    \"cta\": \"Shop Now\",\n    \"theme\": \"Dark\"\n  }\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/stream",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"stream"
+							]
+						},
+						"description": "Generate a project using GPT with questionnaire answers."
+					},
+					"response": []
+				},
+				{
+					"name": "Generate Project (With Questionnaire) - Claude",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"model_family\": \"claude\",\n  \"page_type_key\": \"ecommerce\",\n  \"questionnaire_answers\": {\n    \"target_audience\": \"young_adults\",\n    \"product_categories\": [\n      \"electronics\",\n      \"clothing\"\n    ],\n    \"payment_methods\": \"credit_card\"\n  },\n  \"wizard_inputs\": {\n    \"hero_text\": \"Welcome to our store\",\n    \"subtext\": \"Best products at best prices\",\n    \"cta\": \"Shop Now\",\n    \"theme\": \"Dark\"\n  }\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/stream",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"stream"
+							]
+						},
+						"description": "Generate a project using Claude with questionnaire answers."
+					},
+					"response": []
+				},
+				{
+					"name": "Modify Project - Gemini",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"model_family\": \"gemini\",\n  \"instruction\": \"Change the theme to dark mode and add a footer with social media links\",\n  \"base_project_path\": \"output/project.json\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/stream",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"stream"
+							]
+						},
+						"description": "Modify an existing project using Gemini. Action is inferred from payload (instruction = modify_project).\n\nPayload: Requires `instruction` and optional `base_project_path`.\n\nReturns:\n- `chat.message` - Status messages\n- `thinking.start` / `thinking.end` - Thinking indicators\n- `edit.start` - Streaming modification chunks (multiple)\n- `fs.write` - Modified file writes\n- `stream.complete` - Modification finished"
+					},
+					"response": []
+				},
+				{
+					"name": "Modify Project - GPT",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"model_family\": \"gpt\",\n  \"instruction\": \"Change the theme to dark mode and add a footer with social media links\",\n  \"base_project_path\": \"output/project.json\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/stream",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"stream"
+							]
+						},
+						"description": "Modify an existing project using GPT. Returns contract-compliant streaming events."
+					},
+					"response": []
+				},
+				{
+					"name": "Modify Project - Claude",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"model_family\": \"claude\",\n  \"instruction\": \"Change the theme to dark mode and add a footer with social media links\",\n  \"base_project_path\": \"output/project.json\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/stream",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"stream"
+							]
+						},
+						"description": "Modify an existing project using Claude. Returns contract-compliant streaming events."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Utility Endpoints",
+			"item": [
+				{
+					"name": "Get Page Types",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/v1/page-types",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"page-types"
+							]
+						},
+						"description": "Get all available page types/categories"
+					},
+					"response": []
+				},
+				{
+					"name": "Get Questionnaire",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/v1/questionnaire/ecommerce",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"questionnaire",
+								"ecommerce"
+							]
+						},
+						"description": "Get questionnaire for a specific page type. Replace 'ecommerce' with any page type key."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Latest Project",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/v1/latest-project",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"latest-project"
+							]
+						},
+						"description": "Get the latest generated project JSON"
+					},
+					"response": []
+				},
+				{
+					"name": "Health Check",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/v1/health",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"health"
+							]
+						},
+						"description": "Health check endpoint to verify API is running"
+					},
+					"response": []
+				},
+				{
+					"name": "API Root",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								""
+							]
+						},
+						"description": "Get API information and available endpoints"
+					},
+					"response": []
+				}
+			],
+			"description": "Utility endpoints for page types, questionnaires, and project retrieval"
+		}
+	],
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://localhost:8000",
+			"type": "string",
+			"description": "Base URL for the API server"
+		}
+	],
+	"event": [
+		{
+			"listen": "prerequest",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					""
+				]
+			}
+		},
+		{
+			"listen": "test",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					""
+				]
+			}
+		}
+	]
+}
