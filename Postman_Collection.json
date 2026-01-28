@@ -6,7 +6,7 @@
 		"_postman_id": "webpage-builder-api-v1-contract",
 		"version": {
 			"major": 2,
-			"minor": 0
+			"minor": 1
 		}
 	},
 	"item": [
@@ -316,7 +316,7 @@
 								"stream"
 							]
 						},
-						"description": "First request to generate project using GPT. Only requires user_input, session_id, model_family, and optional project_id."
+						"description": "First request to generate project using GPT. Action is inferred from payload (user_input = generate_project).\n\nPayload: Only requires `user_input`, `model_family`, and optional `project_id`.\n\nNote: `session_id` is optional and auto-generated if not provided.\n\nSystem will:\n1. Classify intent\n2. Classify page type\n3. Ask questions if needed (via chat.question events)\n4. Wait for user input (stream.await_input)\n\nReturns:\n- `chat.message` - Status messages\n- `thinking.start` / `thinking.end` - Thinking indicators\n- `chat.question` - Questions if questionnaire needed\n- `ui.multiselect` - Page type selection if generic\n- `stream.await_input` - Waiting for user response"
 					},
 					"response": []
 				},
@@ -350,7 +350,7 @@
 								"stream"
 							]
 						},
-						"description": "First request to generate project using Claude. Only requires user_input, session_id, model_family, and optional project_id."
+						"description": "First request to generate project using Claude. Action is inferred from payload (user_input = generate_project).\n\nPayload: Only requires `user_input`, `model_family`, and optional `project_id`.\n\nNote: `session_id` is optional and auto-generated if not provided.\n\nSystem will:\n1. Classify intent\n2. Classify page type\n3. Ask questions if needed (via chat.question events)\n4. Wait for user input (stream.await_input)\n\nReturns:\n- `chat.message` - Status messages\n- `thinking.start` / `thinking.end` - Thinking indicators\n- `chat.question` - Questions if questionnaire needed\n- `ui.multiselect` - Page type selection if generic\n- `stream.await_input` - Waiting for user response"
 					},
 					"response": []
 				},
@@ -384,7 +384,7 @@
 								"stream"
 							]
 						},
-						"description": "Generate a project using Gemini with questionnaire answers. Use this after answering questions from classify_intent."
+						"description": "Generate a project using Gemini with questionnaire answers. Action is inferred from payload (page_type_key/questionnaire_answers = generate_project).\n\nPayload: Requires `page_type_key`, `questionnaire_answers`, and `wizard_inputs`.\n\nUse this after answering questions from the first request.\n\nReturns:\n- `chat.message` - Status messages\n- `progress.init` - Progress initialization\n- `progress.update` - Step updates\n- `thinking.start` / `thinking.end` - Thinking indicators\n- `edit.start` - Streaming generation chunks (multiple)\n- `fs.write` - File writes (single source of truth)\n- `stream.complete` - Generation finished"
 					},
 					"response": []
 				},
@@ -418,7 +418,7 @@
 								"stream"
 							]
 						},
-						"description": "Generate a project using GPT with questionnaire answers."
+						"description": "Generate a project using GPT with questionnaire answers. Action is inferred from payload (page_type_key/questionnaire_answers = generate_project).\n\nPayload: Requires `page_type_key`, `questionnaire_answers`, and `wizard_inputs`.\n\nUse this after answering questions from the first request.\n\nReturns:\n- `chat.message` - Status messages\n- `progress.init` - Progress initialization\n- `progress.update` - Step updates\n- `thinking.start` / `thinking.end` - Thinking indicators\n- `edit.start` - Streaming generation chunks (multiple)\n- `fs.write` - File writes (single source of truth)\n- `stream.complete` - Generation finished"
 					},
 					"response": []
 				},
@@ -452,7 +452,7 @@
 								"stream"
 							]
 						},
-						"description": "Generate a project using Claude with questionnaire answers."
+						"description": "Generate a project using Claude with questionnaire answers. Action is inferred from payload (page_type_key/questionnaire_answers = generate_project).\n\nPayload: Requires `page_type_key`, `questionnaire_answers`, and `wizard_inputs`.\n\nUse this after answering questions from the first request.\n\nReturns:\n- `chat.message` - Status messages\n- `progress.init` - Progress initialization\n- `progress.update` - Step updates\n- `thinking.start` / `thinking.end` - Thinking indicators\n- `edit.start` - Streaming generation chunks (multiple)\n- `fs.write` - File writes (single source of truth)\n- `stream.complete` - Generation finished"
 					},
 					"response": []
 				},
