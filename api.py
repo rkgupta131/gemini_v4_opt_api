@@ -384,7 +384,7 @@ async def stream_events(request: StreamRequest) -> AsyncGenerator[str, None]:
                     # Need page type selection - use UI multiselect event
                     from events import UIMultiselectEvent
                     categories = get_all_categories()
-                    options = [{"id": cat["key"], "label": cat["display_name"]} for cat in categories]
+                    options = [{"id": key, "label": cat["display_name"]} for key, cat in categories.items()]
                     multiselect_event = UIMultiselectEvent.create(
                         select_id="page_type_selection",
                         title="Please select a page type",
@@ -536,7 +536,7 @@ async def stream_events(request: StreamRequest) -> AsyncGenerator[str, None]:
                     # Need page type selection
                     from events import UIMultiselectEvent
                     categories = get_all_categories()
-                    options = [{"id": cat["key"], "label": cat["display_name"]} for cat in categories]
+                    options = [{"id": key, "label": cat["display_name"]} for key, cat in categories.items()]
                     multiselect_event = UIMultiselectEvent.create(
                         select_id="page_type_selection",
                         title="Please select a page type",
