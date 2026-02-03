@@ -2,6 +2,7 @@
 import os
 import json
 import time
+import uuid
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from dotenv import load_dotenv
@@ -230,6 +231,12 @@ def _next_chunk(gen):
     except StopIteration:
         return None
 
+
+def generate_short_q_id() -> str:
+    """Generate a 4-digit unique identifier for question IDs (q_xxxx)"""
+    unique_id = uuid.uuid4().hex[:4]
+    return f"q_{unique_id}"
+
 # --------------------------------------------------
 # API ENDPOINTS
 # --------------------------------------------------
@@ -439,8 +446,14 @@ async def stream_events(request: StreamRequest) -> AsyncGenerator[str, None]:
                     # Convert categories to chat.question format (multi_select)
                     question_options = [{"id": key, "label": cat["display_name"]} for key, cat in categories.items()]
                     
+                    # Generate unique q_id using 4-digit UUID
+                    q_id = generate_short_q_id()
+                    
+                    # Store question options in session for later mapping
+                    session[f"question_options_{q_id}"] = question_options
+                    
                     question_event = emitter.emit_chat_question(
-                        q_id="page_type_selection",
+                        q_id=q_id,
                         question_type="multi_select",
                         label="Please select a page type",
                         is_skippable=False,
@@ -463,7 +476,8 @@ async def stream_events(request: StreamRequest) -> AsyncGenerator[str, None]:
                     # Emit questions using chat.question events (contract-compliant)
                     type_mapping = {"radio": "mcq", "multiselect": "multi_select"}
                     for question_data in questionnaire["questions"]:
-                        q_id = question_data["id"]
+                        # Generate unique q_id using 4-digit UUID (scalable)
+                        q_id = generate_short_q_id()
                         q_text = question_data["question"]
                         q_type = question_data["type"]
                         options = question_data.get("options", [])
@@ -472,6 +486,8 @@ async def stream_events(request: StreamRequest) -> AsyncGenerator[str, None]:
                         content = {}
                         if contract_type in ["mcq", "multi_select"]:
                             content["options"] = options
+                            # Store question options in session for later mapping
+                            session[f"question_options_{q_id}"] = options
                         
                         question_event = emitter.emit_chat_question(
                             q_id=q_id,
@@ -619,8 +635,14 @@ async def stream_events(request: StreamRequest) -> AsyncGenerator[str, None]:
                     # Convert categories to chat.question format (multi_select)
                     question_options = [{"id": key, "label": cat["display_name"]} for key, cat in categories.items()]
                     
+                    # Generate unique q_id using 4-digit UUID
+                    q_id = generate_short_q_id()
+                    
+                    # Store question options in session for later mapping
+                    session[f"question_options_{q_id}"] = question_options
+                    
                     question_event = emitter.emit_chat_question(
-                        q_id="page_type_selection",
+                        q_id=q_id,
                         question_type="multi_select",
                         label="Please select a page type",
                         is_skippable=False,
@@ -644,7 +666,8 @@ async def stream_events(request: StreamRequest) -> AsyncGenerator[str, None]:
                     # Emit questions
                     type_mapping = {"radio": "mcq", "multiselect": "multi_select"}
                     for question_data in questionnaire["questions"]:
-                        q_id = question_data["id"]
+                        # Generate unique q_id using 4-digit UUID (scalable)
+                        q_id = generate_short_q_id()
                         q_text = question_data["question"]
                         q_type = question_data["type"]
                         options = question_data.get("options", [])
@@ -653,6 +676,8 @@ async def stream_events(request: StreamRequest) -> AsyncGenerator[str, None]:
                         content = {}
                         if contract_type in ["mcq", "multi_select"]:
                             content["options"] = options
+                            # Store question options in session for later mapping
+                            session[f"question_options_{q_id}"] = options
                         
                         question_event = emitter.emit_chat_question(
                             q_id=q_id,
@@ -1106,140 +1131,573 @@ async def stream_endpoint(request: StreamRequest):
     )
 
 
-@app.post("/api/v1/stream/message/", response_model=MessageResponse)
+@app.post("/api/v1/stream/message/")
 async def stream_message_endpoint(request: MessageRequest):
     """
     Process user answers to LLM questions and continue/resume SSE streaming.
     
-    This endpoint:
-    1. Validates the request payload
-    2. Loads conversation context using chat_id
-    3. Processes all question responses
-    4. Continues LLM execution with answers + optional user_input
-    5. Resumes SSE streaming with updated context
+    All responses are converted into a user prompt that continues the conversation.
     """
+    log("=" * 80)
+    log("📨 POST /api/v1/stream/message/ - REQUEST RECEIVED")
+    log("=" * 80)
+    log(f"Project ID: {request.project_id}")
+    log(f"Chat ID: {request.chat_id}")
+    log(f"User Input: {request.user_input}")
+    log(f"Number of responses: {len(request.responses)}")
+    log("-" * 80)
+    
     try:
         # Validate required fields
+        log("🔍 Step 1: Validating required fields...")
         if not request.project_id:
+            log("❌ Validation failed: project_id is required")
             raise HTTPException(status_code=400, detail="project_id is required")
+        log("✓ project_id validated")
         
         if not request.chat_id:
+            log("❌ Validation failed: chat_id is required")
             raise HTTPException(status_code=400, detail="chat_id is required")
+        log("✓ chat_id validated")
         
         if not request.responses or len(request.responses) == 0:
+            log("❌ Validation failed: responses array is required and cannot be empty")
             raise HTTPException(status_code=400, detail="responses array is required and cannot be empty")
+        log(f"✓ responses array validated ({len(request.responses)} responses)")
         
         # Validate each response
+        log("\n🔍 Step 2: Validating each response...")
         for idx, response in enumerate(request.responses):
+            log(f"\n  Response[{idx}]:")
+            log(f"    q_id: {response.q_id}")
+            log(f"    q_type: {response.q_type}")
+            log(f"    skipped: {response.skipped}")
+            log(f"    content.label: {response.content.label}")
+            
             if not response.q_id:
+                log(f"    ❌ Missing q_id in response[{idx}]")
                 raise HTTPException(status_code=400, detail=f"Missing q_id in response[{idx}]")
             
             if response.q_type not in ["open_ended", "mcq", "multi_select", "form"]:
+                log(f"    ❌ Invalid q_type '{response.q_type}' in response[{idx}]")
                 raise HTTPException(status_code=400, detail=f"Invalid q_type '{response.q_type}' in response[{idx}]. Must be one of: open_ended, mcq, multi_select, form")
             
             # Validate type-specific content fields
             content = response.content
             if response.q_type == "open_ended":
+                log(f"    content.answer: {content.answer}")
                 if content.selectedOption is not None or content.selectedOptions is not None or content.answers is not None:
+                    log(f"    ❌ open_ended should only have 'answer' field")
                     raise HTTPException(status_code=400, detail=f"Response[{idx}]: open_ended should only have 'answer' field")
+                log(f"    ✓ open_ended validation passed")
             elif response.q_type == "mcq":
+                log(f"    content.selectedOption: {content.selectedOption}")
                 if content.answer is not None or content.selectedOptions is not None or content.answers is not None:
+                    log(f"    ❌ mcq should only have 'selectedOption' field")
                     raise HTTPException(status_code=400, detail=f"Response[{idx}]: mcq should only have 'selectedOption' field")
+                log(f"    ✓ mcq validation passed")
             elif response.q_type == "multi_select":
+                log(f"    content.selectedOptions: {content.selectedOptions}")
                 if content.answer is not None or content.selectedOption is not None or content.answers is not None:
+                    log(f"    ❌ multi_select should only have 'selectedOptions' field")
                     raise HTTPException(status_code=400, detail=f"Response[{idx}]: multi_select should only have 'selectedOptions' field")
+                log(f"    ✓ multi_select validation passed")
             elif response.q_type == "form":
+                log(f"    content.answers: {content.answers}")
                 if content.answer is not None or content.selectedOption is not None or content.selectedOptions is not None:
+                    log(f"    ❌ form should only have 'answers' field")
                     raise HTTPException(status_code=400, detail=f"Response[{idx}]: form should only have 'answers' field")
+                log(f"    ✓ form validation passed")
+        
+        log("\n✓ All responses validated successfully")
         
         # Load conversation context using chat_id
-        # Note: In production, this should load from Supabase:
-        # SELECT * FROM chat_messages WHERE chat_id = ? ORDER BY created_at ASC
-        # For now, we use session storage with chat_id as session_id
+        log(f"\n🔍 Step 3: Loading conversation context...")
+        log(f"  Using chat_id as session_id: {request.chat_id}")
         session = get_or_create_session(request.chat_id)
+        log(f"  ✓ Session loaded/created")
+        log(f"  Session keys: {list(session.keys())}")
         
-        # Process responses and build questionnaire_answers dict
+        # Process responses and build questionnaire_answers dict and user prompt
+        log(f"\n🔍 Step 4: Processing responses and building user prompt...")
         questionnaire_answers = {}
+        user_prompt_parts = []
         
         # Check for open_ended question (there should be only one, and it's always alone)
         open_ended_response = None
         for response in request.responses:
             if response.q_type == "open_ended":
                 if open_ended_response is not None:
+                    log("❌ Multiple open_ended questions found")
                     raise HTTPException(status_code=400, detail="Multiple open_ended questions found. Only one open_ended question is allowed.")
                 open_ended_response = response
+                log(f"  Found open_ended question: q_id={response.q_id}")
         
         # Validate open_ended behavior: should be alone
         if open_ended_response and len(request.responses) > 1:
+            log("❌ open_ended question cannot be mixed with other question types")
             raise HTTPException(status_code=400, detail="open_ended question cannot be mixed with other question types")
         
         # Process all responses
-        for response in request.responses:
+        log(f"\n  Processing {len(request.responses)} response(s)...")
+        for idx, response in enumerate(request.responses):
             if response.skipped:
-                continue  # Skip processing skipped questions
+                log(f"  Response[{idx}] (q_id: {response.q_id}) - SKIPPED, skipping processing")
+                continue
             
             q_id = response.q_id
             q_type = response.q_type
             content = response.content
+            label = content.label  # Question label from chat.question event
+            
+            log(f"\n  Response[{idx}] (q_id: {q_id}, type: {q_type}):")
+            log(f"    Question: {label}")
             
             if q_type == "open_ended":
-                # For open_ended: ChatInput text goes to content.answer (no user_input expected)
                 if content.answer:
+                    log(f"    Answer: {content.answer}")
+                    user_prompt_parts.append(f"{label}: {content.answer}")
                     questionnaire_answers[q_id] = content.answer
+                    log(f"    ✓ Stored in questionnaire_answers[{q_id}]")
+                    
             elif q_type == "mcq":
-                # For mcq: use selectedOption (may be empty string if unselected)
                 if content.selectedOption:
+                    log(f"    Selected Option: {content.selectedOption}")
+                    user_prompt_parts.append(f"{label}: {content.selectedOption}")
                     questionnaire_answers[q_id] = content.selectedOption
+                    log(f"    ✓ Stored in questionnaire_answers[{q_id}]")
+                else:
+                    log(f"    ⚠️ No option selected (empty or None)")
+                    
             elif q_type == "multi_select":
-                # For multi_select: use selectedOptions array
                 if content.selectedOptions:
+                    log(f"    Selected Options (IDs): {content.selectedOptions}")
+                    # Try to map IDs to labels if available
+                    question_options = session.get(f"question_options_{q_id}", [])
+                    if question_options:
+                        log(f"    Found stored question options: {len(question_options)} options")
+                        options_dict = {opt.get("id"): opt.get("label") for opt in question_options}
+                        selected_labels = [options_dict.get(opt_id, opt_id) for opt_id in content.selectedOptions]
+                        selected_text = ", ".join(selected_labels)
+                        log(f"    Mapped to labels: {selected_labels}")
+                    else:
+                        selected_text = ", ".join(content.selectedOptions)
+                        log(f"    Using IDs directly (no stored options found)")
+                    
+                    user_prompt_parts.append(f"{label}: {selected_text}")
                     questionnaire_answers[q_id] = content.selectedOptions
+                    log(f"    ✓ Stored in questionnaire_answers[{q_id}]")
+                else:
+                    log(f"    ⚠️ No options selected (empty list)")
+                    
             elif q_type == "form":
-                # For form: convert answers array to dict
                 if content.answers:
+                    log(f"    Form answers: {content.answers}")
+                    form_parts = []
+                    for field in content.answers:
+                        field_label = field.get("label", "")
+                        field_answer = field.get("answer", "")
+                        if isinstance(field_answer, list):
+                            field_answer = ", ".join(field_answer)
+                        form_parts.append(f"{field_label}: {field_answer}")
+                        log(f"      - {field_label}: {field_answer}")
+                    form_text = ", ".join(form_parts)
+                    user_prompt_parts.append(f"{label}: {form_text}")
+                    
                     form_answers = {}
                     for field in content.answers:
                         field_label = field.get("label", "")
                         field_answer = field.get("answer", "")
                         form_answers[field_label] = field_answer
                     questionnaire_answers[q_id] = form_answers
+                    log(f"    ✓ Stored in questionnaire_answers[{q_id}]")
+        
+        # Combine all responses into a user prompt
+        combined_prompt = "\n".join(user_prompt_parts)
+        log(f"\n  📝 Combined user prompt from responses:")
+        if combined_prompt:
+            log(f"  {combined_prompt}")
+        else:
+            log(f"  (empty - no responses processed)")
+        
+        # Add user_input if provided (additional text entered along with questions)
+        if request.user_input:
+            log(f"\n  📝 Adding user_input to prompt:")
+            log(f"  {request.user_input}")
+            if combined_prompt:
+                combined_prompt = f"{combined_prompt}\n\nAdditional requirements: {request.user_input}"
+            else:
+                combined_prompt = request.user_input
+            log(f"  ✓ Final combined prompt:")
+            log(f"  {combined_prompt}")
+        else:
+            log(f"\n  ℹ️ No user_input provided")
         
         # Store questionnaire answers in session
+        log(f"\n🔍 Step 5: Storing data in session...")
         session["questionnaire_answers"] = questionnaire_answers
+        log(f"  ✓ Stored questionnaire_answers: {json.dumps(questionnaire_answers, indent=2)}")
         
-        # Handle user_input based on open_ended question logic
-        # If open_ended exists and NOT skipped: ChatInput text = answer (already processed above, no user_input)
-        # If open_ended exists and skipped: ChatInput text = user_input (user prompt)
-        # If no open_ended: ChatInput text = user_input (additional prompt)
-        user_input_to_use = None
-        if open_ended_response and open_ended_response.skipped:
-            # Open_ended was skipped, so user_input is the user prompt
-            user_input_to_use = request.user_input
-        elif not open_ended_response:
-            # No open_ended question, so user_input is additional prompt
-            user_input_to_use = request.user_input
-        
-        # Store user_input if provided
-        if user_input_to_use:
-            session["user_input_from_message"] = user_input_to_use
+        # Store the combined prompt as user_input for LLM continuation
+        if combined_prompt:
+            session["user_input_from_message"] = combined_prompt
+            prompt_preview = combined_prompt[:100] + "..." if len(combined_prompt) > 100 else combined_prompt
+            log(f"  ✓ Stored user_input_from_message: {prompt_preview}")
         
         # Store project_id and chat_id in session for context
         session["project_id"] = request.project_id
         session["chat_id"] = request.chat_id
+        log(f"  ✓ Stored project_id: {request.project_id}")
+        log(f"  ✓ Stored chat_id: {request.chat_id}")
         
-        # Return success response
-        # Note: Frontend expects SSE events to continue after receiving 200 OK
-        # The frontend should then make a new request to /api/v1/stream with the updated context
-        return MessageResponse(
-            status="success",
-            message="Answers received, continuing stream"
+        # Log final session state
+        log(f"\n📊 Final Session State:")
+        log(f"  Keys: {list(session.keys())}")
+        log(f"  questionnaire_answers keys: {list(questionnaire_answers.keys())}")
+        if "user_input_from_message" in session:
+            log(f"  user_input_from_message length: {len(session['user_input_from_message'])} chars")
+        
+        # Step 7: Build system prompt and call LLM
+        log(f"\n🔍 Step 7: Building system prompt and calling LLM...")
+        
+        # Get model family from session or default to gemini
+        model_family = session.get("model_family", "gemini")
+        log(f"  Model family: {model_family}")
+        
+        # Get page_type_key from session (should be set from previous stream request)
+        page_type_key = session.get("page_type_key")
+        log(f"  Page type key: {page_type_key}")
+        
+        # Build system prompt (same structure as generate_project)
+        base_prompt = (
+            "Return JSON only: React+Vite+TypeScript project. Schema: {\"project\": {\"name\": string, \"description\": string, \"files\": {...}, \"dirents\": {...}, \"meta\": {...}}}. Files: strings or {\"content\": \"...\"}.\n\n"
+            "🚨 REACT APP ONLY - NO STATIC HTML 🚨\n\n"
+            "REQUIRED:\n"
+            "1. React 18+ + TypeScript (.tsx only, NO .html pages)\n"
+            "2. Vite + @vitejs/plugin-react\n"
+            "3. Structure: src/main.tsx, src/App.tsx (React Router), src/pages/*.tsx, src/components/*.tsx, src/types/*.ts\n"
+            "4. package.json: React, React-DOM, Vite, TypeScript, react-router-dom\n"
+            "5. React Router: BrowserRouter, Routes, Route\n"
+            "6. Functional components + TypeScript interfaces\n"
+            "7. React hooks: useState, useEffect, useContext\n"
+            "8. Interactive: buttons/forms/nav work\n"
+            "9. Styling: CSS Modules/styled-components/Tailwind (NOT inline HTML styles)\n"
+            "10. index.html = entry only, all content via React\n\n"
+            "FORBIDDEN: Static HTML pages, plain HTML/CSS, image-only layouts, missing Router/TypeScript.\n"
+        )
+        
+        # Add page type specific instructions if available
+        if page_type_key:
+            page_type_config = get_page_type_by_key(page_type_key)
+            if page_type_config:
+                base_prompt += f"\n=== PAGE TYPE: {page_type_config['name']} ({page_type_config['category']}) ===\n"
+                base_prompt += f"Target User: {page_type_config['end_user']}\n\n"
+                base_prompt += "REQUIRED CORE PAGES:\n"
+                for i, page in enumerate(page_type_config['core_pages'], 1):
+                    base_prompt += f"{i}. {page}\n"
+                base_prompt += "\n\nREQUIRED COMPONENTS TO IMPLEMENT:\n"
+                for i, component in enumerate(page_type_config['components'], 1):
+                    base_prompt += f"{i}. **{component['name']}**: {component['description']}\n"
+                log(f"  ✓ Added page type context: {page_type_config['name']}")
+        
+        # Add questionnaire answers to system prompt
+        if questionnaire_answers:
+            base_prompt += "\n=== USER REQUIREMENTS (from questionnaire) ===\n"
+            for key, value in questionnaire_answers.items():
+                if isinstance(value, list):
+                    base_prompt += f"- {key}\n  Selected: {', '.join(value)}\n"
+                else:
+                    base_prompt += f"- {key}\n  Answer: {value}\n"
+            log(f"  ✓ Added questionnaire answers to system prompt")
+        
+        # Add wizard inputs if available
+        wizard_inputs = session.get("wizard_inputs")
+        if wizard_inputs:
+            if isinstance(wizard_inputs, dict):
+                wizard_data = wizard_inputs
+            elif hasattr(wizard_inputs, 'dict'):
+                wizard_data = wizard_inputs.dict()
+            else:
+                wizard_data = {}
+            base_prompt += "\nUSER_FIELDS:\n" + json.dumps(wizard_data, ensure_ascii=False)
+            log(f"  ✓ Added wizard inputs to system prompt")
+        
+        # Combine system prompt + user prompt
+        final_prompt = base_prompt + "\n\n=== USER REQUEST ===\n" + combined_prompt
+        
+        log(f"  System prompt length: {len(base_prompt)} chars")
+        log(f"  User prompt length: {len(combined_prompt)} chars")
+        log(f"  Final prompt length: {len(final_prompt)} chars")
+        
+        # Get model for generation
+        from models.model_factory import get_provider
+        try:
+            provider = get_provider(model_family)
+            webpage_model = provider.get_default_model()
+            log(f"  Using model: {webpage_model}")
+        except Exception as e:
+            log(f"  ❌ Failed to get provider: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Failed to initialize {model_family} provider: {str(e)}")
+        
+        log(f"\n✅ Step 8: Starting LLM stream...")
+        log("=" * 80)
+        
+        # Return streaming response
+        return StreamingResponse(
+            stream_project_generation_from_message(
+                final_prompt=final_prompt,
+                model=webpage_model,
+                model_family=model_family,
+                project_id=request.project_id,
+                conversation_id=request.chat_id,
+                session=session
+            ),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no"
+            }
         )
     
-    except HTTPException:
+    except HTTPException as e:
+        log(f"\n❌ HTTPException: {e.status_code} - {e.detail}")
+        log("=" * 80)
         raise
     except Exception as e:
+        log(f"\n❌ Exception: {str(e)}")
+        log(f"  Type: {type(e).__name__}")
+        import traceback
+        log(f"  Traceback:\n{traceback.format_exc()}")
+        log("=" * 80)
         log(f"[MESSAGE_ENDPOINT_ERROR] {str(e)}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+async def stream_project_generation_from_message(
+    final_prompt: str,
+    model: str,
+    model_family: str,
+    project_id: str,
+    conversation_id: str,
+    session: Dict[str, Any]
+) -> AsyncGenerator[str, None]:
+    """Stream project generation after message processing - combines system prompt + user prompt"""
+    # Initialize event system
+    event_logger = get_event_logger()
+    emitter = EventEmitter(
+        project_id=project_id,
+        conversation_id=conversation_id,
+        callback=lambda event: event_logger.log_event(event)
+    )
+    
+    def yield_event(event: EventEnvelope):
+        """Yield an event in proper SSE format"""
+        return f"data: {event.to_json()}\n\n"
+    
+    try:
+        log(f"[STREAM_GENERATION] Starting project generation stream")
+        log(f"[STREAM_GENERATION] Model: {model} ({model_family})")
+        log(f"[STREAM_GENERATION] Prompt length: {len(final_prompt)} chars")
+        
+        # Emit progress events
+        progress_init = emitter.emit_progress_init(
+            steps=[
+                {"id": "prepare", "label": "Preparing", "status": "in_progress"},
+                {"id": "generate", "label": "Generating", "status": "pending"},
+                {"id": "parse", "label": "Parsing", "status": "pending"},
+                {"id": "save", "label": "Saving", "status": "pending"},
+            ],
+            mode="inline"
+        )
+        yield yield_event(progress_init)
+        await asyncio.sleep(0)
+        
+        progress_prepare = emitter.emit_progress_update("prepare", "completed")
+        yield yield_event(progress_prepare)
+        await asyncio.sleep(0)
+        
+        progress_generate = emitter.emit_progress_update("generate", "in_progress")
+        yield yield_event(progress_generate)
+        await asyncio.sleep(0)
+        
+        thinking_start = emitter.emit_thinking_start()
+        yield yield_event(thinking_start)
+        await asyncio.sleep(0)
+        
+        gen_msg = emitter.emit_chat_message(f"Generating project using {model} ({model_family})...")
+        yield yield_event(gen_msg)
+        await asyncio.sleep(0)
+        
+        start_time = time.time()
+        
+        # Stream the generation
+        from events import EditStartEvent
+        output = ""
+        loop = asyncio.get_event_loop()
+        stream_gen = generate_stream(final_prompt, model=model, model_family=model_family)
+        
+        log(f"[STREAM_GENERATION] Starting LLM stream...")
+        chunk_count = 0
+        while True:
+            chunk = await loop.run_in_executor(None, _next_chunk, stream_gen)
+            if chunk is None:
+                break
+            output += chunk
+            chunk_count += 1
+            edit_chunk = EditStartEvent.create(
+                path="project_generation",
+                content=chunk,
+                project_id=project_id,
+                conversation_id=conversation_id
+            )
+            yield yield_event(edit_chunk)
+            await asyncio.sleep(0)
+        
+        log(f"[STREAM_GENERATION] Received {chunk_count} chunks, total length: {len(output)} chars")
+        
+        elapsed_time = time.time() - start_time
+        thinking_end = emitter.emit_thinking_end(duration_ms=int(elapsed_time * 1000))
+        yield yield_event(thinking_end)
+        await asyncio.sleep(0)
+        
+        progress_gen_complete = emitter.emit_progress_update("generate", "completed")
+        yield yield_event(progress_gen_complete)
+        await asyncio.sleep(0)
+        
+        progress_parse = emitter.emit_progress_update("parse", "in_progress")
+        yield yield_event(progress_parse)
+        await asyncio.sleep(0)
+        
+        if not output or len(output) < 100:
+            log(f"[STREAM_GENERATION] ❌ Empty or very short output: {len(output)} chars")
+            parse_failed = emitter.emit_progress_update("parse", "failed")
+            yield yield_event(parse_failed)
+            await asyncio.sleep(0)
+            
+            error_event = emitter.emit_error(
+                scope="validation",
+                message="Failed to parse JSON from model output",
+                details="The model may have returned invalid JSON or non-JSON content.",
+                actions=["retry", "ask_user"]
+            )
+            yield yield_event(error_event)
+            await asyncio.sleep(0)
+            
+            stream_failed = emitter.emit_stream_failed()
+            yield yield_event(stream_failed)
+            await asyncio.sleep(0)
+            return
+        
+        log(f"[STREAM_GENERATION] Parsing JSON output...")
+        project = parse_project_json(output)
+        
+        if not project:
+            log(f"[STREAM_GENERATION] ❌ Failed to parse JSON")
+            parse_failed = emitter.emit_progress_update("parse", "failed")
+            yield yield_event(parse_failed)
+            await asyncio.sleep(0)
+            
+            error_event = emitter.emit_error(
+                scope="validation",
+                message="Failed to parse JSON from model output",
+                details="The model may have returned invalid JSON or non-JSON content.",
+                actions=["retry", "ask_user"]
+            )
+            yield yield_event(error_event)
+            await asyncio.sleep(0)
+            
+            stream_failed = emitter.emit_stream_failed()
+            yield yield_event(stream_failed)
+            await asyncio.sleep(0)
+            return
+        
+        log(f"[STREAM_GENERATION] ✓ JSON parsed successfully, {len(project.get('files', {}))} files")
+        
+        parse_complete = emitter.emit_progress_update("parse", "completed")
+        yield yield_event(parse_complete)
+        await asyncio.sleep(0)
+        
+        save_progress = emitter.emit_progress_update("save", "in_progress")
+        yield yield_event(save_progress)
+        await asyncio.sleep(0)
+        
+        parsed_msg = emitter.emit_chat_message(f"JSON parsed successfully. Project has {len(project.get('files', {}))} files.")
+        yield yield_event(parsed_msg)
+        await asyncio.sleep(0)
+        
+        # Save project
+        project_json_path = f"{OUTPUT_DIR}/project.json"
+        with open(project_json_path, "w") as f:
+            json.dump({"project": project}, f, indent=2)
+        
+        log(f"[STREAM_GENERATION] ✓ Saved project.json")
+        
+        emitter.emit_fs_write(
+            path="project.json",
+            kind="file",
+            language="json",
+            content=json.dumps({"project": project}, indent=2)
+        )
+        
+        # Save all files
+        files = project.get('files', {})
+        log(f"[STREAM_GENERATION] Saving {len(files)} files...")
+        for file_path, file_content in files.items():
+            if isinstance(file_content, dict):
+                content = file_content.get('content', '')
+                language = file_content.get('language', None)
+            else:
+                content = file_content
+                language = None
+            
+            if not language:
+                if file_path.endswith('.tsx') or file_path.endswith('.ts'):
+                    language = 'typescript'
+                elif file_path.endswith('.jsx') or file_path.endswith('.js'):
+                    language = 'javascript'
+                elif file_path.endswith('.css'):
+                    language = 'css'
+                elif file_path.endswith('.json'):
+                    language = 'json'
+                elif file_path.endswith('.html'):
+                    language = 'html'
+            
+            emitter.emit_fs_write(
+                path=file_path,
+                kind="file",
+                language=language,
+                content=content if isinstance(content, str) else json.dumps(content)
+            )
+        
+        save_project_files(project, f"{OUTPUT_DIR}/project")
+        log(f"[STREAM_GENERATION] ✓ All files saved")
+        
+        save_complete = emitter.emit_progress_update("save", "completed")
+        yield yield_event(save_complete)
+        await asyncio.sleep(0)
+        
+        success_msg = emitter.emit_chat_message("Base project generated successfully!")
+        yield yield_event(success_msg)
+        await asyncio.sleep(0)
+        
+        complete_event = emitter.emit_stream_complete()
+        yield yield_event(complete_event)
+        await asyncio.sleep(0)
+        
+        log(f"[STREAM_GENERATION] ✅ Stream complete")
+        
+    except Exception as e:
+        error_msg = str(e)
+        log(f"[STREAM_GENERATION_ERROR] {error_msg}")
+        import traceback
+        log(f"[STREAM_GENERATION_ERROR] Traceback:\n{traceback.format_exc()}")
+        error_event = emitter.emit_error(scope="runtime", message=error_msg)
+        yield yield_event(error_event)
+        await asyncio.sleep(0)
+        stream_failed = emitter.emit_stream_failed()
+        yield yield_event(stream_failed)
+        await asyncio.sleep(0)
 
 
 @app.post("/api/v1/classify-intent", response_model=IntentResponse)

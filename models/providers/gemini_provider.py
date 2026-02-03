@@ -128,3 +128,6 @@ class GeminiProvider(ModelProvider):
         """Get default Gemini model for webpage generation"""
         return "gemini-3-pro-preview"
 
+
+
+

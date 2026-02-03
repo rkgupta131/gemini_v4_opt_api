@@ -47,3 +47,6 @@ else
     echo "3. You're authenticated with GitHub (git credential or SSH key)"
 fi
 
+
+
+

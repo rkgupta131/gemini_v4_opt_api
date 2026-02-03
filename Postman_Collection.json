@@ -6,7 +6,7 @@
 		"_postman_id": "webpage-builder-api-v1-contract",
 		"version": {
 			"major": 2,
-			"minor": 5
+			"minor": 6
 		}
 	},
 	"item": [
@@ -570,7 +570,7 @@
 						],
 						"body": {
 							"mode": "raw",
-							"raw": "{\n  \"project_id\": \"0ba08159-038b-44ea-b7d4-299e0644ba39\",\n  \"chat_id\": \"801c8dd2-f762-4314-918c-c0a226ff9a29\",\n  \"responses\": [\n    {\n      \"q_id\": \"target_audience\",\n      \"q_type\": \"mcq\",\n      \"content\": {\n        \"label\": \"Who is your target audience?\",\n        \"selectedOption\": \"young_adults\"\n      },\n      \"skipped\": false\n    },\n    {\n      \"q_id\": \"product_categories\",\n      \"q_type\": \"multi_select\",\n      \"content\": {\n        \"label\": \"What product categories do you want?\",\n        \"selectedOptions\": [\"electronics\", \"clothing\"]\n      },\n      \"skipped\": false\n    }\n  ],\n  \"user_input\": \"Make it modern and sleek\"\n}",
+							"raw": "{\n  \"project_id\": \"0ba08159-038b-44ea-b7d4-299e0644ba39\",\n  \"chat_id\": \"801c8dd2-f762-4314-918c-c0a226ff9a29\",\n  \"responses\": [\n    {\n      \"q_id\": \"q_a1b2\",\n      \"q_type\": \"mcq\",\n      \"content\": {\n        \"label\": \"Who is your target audience?\",\n        \"selectedOption\": \"young_adults\"\n      },\n      \"skipped\": false\n    },\n    {\n      \"q_id\": \"q_c3d4\",\n      \"q_type\": \"multi_select\",\n      \"content\": {\n        \"label\": \"What product categories do you want?\",\n        \"selectedOptions\": [\"electronics\", \"clothing\"]\n      },\n      \"skipped\": false\n    }\n  ],\n  \"user_input\": \"Make it modern and sleek\"\n}",
 							"options": {
 								"raw": {
 									"language": "json"
@@ -590,7 +590,7 @@
 								""
 							]
 						},
-						"description": "Process user answers to LLM questions and continue/resume SSE streaming.\n\nThis endpoint:\n1. Validates the request payload\n2. Loads conversation context using chat_id\n3. Processes all question responses\n4. Continues LLM execution with answers + optional user_input\n5. Resumes SSE streaming with updated context\n\n**Payload Structure:**\n- `project_id` (required): Project identifier\n- `chat_id` (required): Chat/conversation identifier (used to load context)\n- `responses` (required): Array of question responses\n  - `q_id`: Question ID from chat.question event\n  - `q_type`: \"open_ended\" | \"mcq\" | \"multi_select\" | \"form\"\n  - `content`: Response content (varies by type)\n    - `answer`: For open_ended\n    - `selectedOption`: For mcq\n    - `selectedOptions`: For multi_select\n    - `answers`: For form (array of {label, answer})\n  - `skipped`: Whether user skipped this question\n- `user_input` (optional): Additional text input from chat textarea\n\n**Important Notes:**\n- There is ALWAYS only ONE open_ended question (never multiple)\n- open_ended questions NEVER come with other questions (always alone)\n- For open_ended questions: ChatInput text → `responses[0].content.answer` (no `user_input`)\n- If open_ended is skipped: ChatInput text → `user_input`\n- If no open_ended: ChatInput text → `user_input`\n\n**Response:**\n- 200 OK: `{\"status\": \"success\", \"message\": \"Answers received, continuing stream\"}`\n- 400 Bad Request: Validation errors\n- 404 Not Found: chat_id doesn't exist\n- 500 Internal Server Error: Processing errors\n\nAfter receiving 200 OK, frontend should make a new request to `/api/v1/stream` with updated context."
+						"description": "Process user answers to LLM questions and continue/resume SSE streaming.\n\n**Key Features:**\n- All responses are converted into a user prompt using question labels and selected options\n- Responses are combined with user_input into a single prompt for LLM continuation\n- Question IDs use 4-digit UUID format (q_xxxx) for scalability\n- Verbose logging in terminal shows all processing steps\n\n**This endpoint:**\n1. Validates the request payload\n2. Loads conversation context using chat_id\n3. Processes all question responses and builds user prompt\n4. Maps selectedOptions IDs to labels using stored question options\n5. Stores combined prompt in session for LLM continuation\n6. Returns success response\n\n**Payload Structure:**\n- `project_id` (required): Project identifier\n- `chat_id` (required): Chat/conversation identifier (used to load context)\n- `responses` (required): Array of question responses\n  - `q_id`: Question ID from chat.question event (format: q_xxxx - 4-digit UUID)\n  - `q_type`: \"open_ended\" | \"mcq\" | \"multi_select\" | \"form\"\n  - `content`: Response content (varies by type)\n    - `label`: Question label from chat.question event\n    - `answer`: For open_ended\n    - `selectedOption`: For mcq\n    - `selectedOptions`: For multi_select (array of option IDs)\n    - `answers`: For form (array of {label, answer})\n  - `skipped`: Whether user skipped this question\n- `user_input` (optional): Additional text input from chat textarea\n\n**Response Processing:**\n- All responses are converted to natural language prompt format:\n  - `open_ended`: \"Question: Answer\"\n  - `mcq`: \"Question: Selected Option\"\n  - `multi_select`: \"Question: Option1, Option2\" (IDs mapped to labels)\n  - `form`: \"Question: Field1: Answer1, Field2: Answer2\"\n- Combined prompt stored in `session[\"user_input_from_message\"]`\n\n**Important Notes:**\n- There is ALWAYS only ONE open_ended question (never multiple)\n- open_ended questions NEVER come with other questions (always alone)\n- For open_ended questions: ChatInput text → `responses[0].content.answer` (no `user_input`)\n- If open_ended is skipped: ChatInput text → `user_input`\n- If no open_ended: ChatInput text → `user_input`\n- Question options are stored in session when emitted, enabling ID-to-label mapping\n\n**Response:**\n- 200 OK: `{\"status\": \"success\", \"message\": \"Answers received, continuing stream\"}`\n- 400 Bad Request: Validation errors\n- 404 Not Found: chat_id doesn't exist\n- 500 Internal Server Error: Processing errors\n\n**Verbose Logging:**\nCheck terminal for detailed logs showing:\n- Request received with full payload\n- Step-by-step validation\n- Response processing with prompt building\n- Session storage operations\n- Final session state\n\nAfter receiving 200 OK, frontend should make a new request to `/api/v1/stream` with the same `chat_id` as `session_id` to continue the stream."
 					},
 					"response": []
 				},
@@ -606,7 +606,7 @@
 						],
 						"body": {
 							"mode": "raw",
-							"raw": "{\n  \"project_id\": \"0ba08159-038b-44ea-b7d4-299e0644ba39\",\n  \"chat_id\": \"801c8dd2-f762-4314-918c-c0a226ff9a29\",\n  \"responses\": [\n    {\n      \"q_id\": \"project_name\",\n      \"q_type\": \"open_ended\",\n      \"content\": {\n        \"label\": \"What is your project name?\",\n        \"answer\": \"My Todo App\"\n      },\n      \"skipped\": false\n    }\n  ]\n}",
+							"raw": "{\n  \"project_id\": \"0ba08159-038b-44ea-b7d4-299e0644ba39\",\n  \"chat_id\": \"801c8dd2-f762-4314-918c-c0a226ff9a29\",\n  \"responses\": [\n    {\n      \"q_id\": \"q_e5f6\",\n      \"q_type\": \"open_ended\",\n      \"content\": {\n        \"label\": \"What is your project name?\",\n        \"answer\": \"My Todo App\"\n      },\n      \"skipped\": false\n    }\n  ]\n}",
 							"options": {
 								"raw": {
 									"language": "json"
@@ -626,7 +626,7 @@
 								""
 							]
 						},
-						"description": "Example: Single open_ended question (NOT skipped).\n\nNote: No `user_input` field - ChatInput text goes to `responses[0].content.answer`"
+						"description": "Example: Single open_ended question (NOT skipped).\n\n**Key Points:**\n- q_id uses 4-digit UUID format (q_e5f6)\n- No `user_input` field - ChatInput text goes to `responses[0].content.answer`\n- Response is converted to prompt: \"What is your project name?: My Todo App\"\n- Prompt stored in session for LLM continuation\n\n**Terminal Output:**\nYou'll see verbose logs showing:\n- Response processing\n- Prompt building: \"What is your project name?: My Todo App\"\n- Session storage operations"
 					},
 					"response": []
 				},
@@ -642,7 +642,7 @@
 						],
 						"body": {
 							"mode": "raw",
-							"raw": "{\n  \"project_id\": \"0ba08159-038b-44ea-b7d4-299e0644ba39\",\n  \"chat_id\": \"801c8dd2-f762-4314-918c-c0a226ff9a29\",\n  \"responses\": [\n    {\n      \"q_id\": \"project_name\",\n      \"q_type\": \"open_ended\",\n      \"content\": {\n        \"label\": \"What is your project name?\",\n        \"answer\": \"\"\n      },\n      \"skipped\": true\n    }\n  ],\n  \"user_input\": \"Build a todo app with dark mode\"\n}",
+							"raw": "{\n  \"project_id\": \"0ba08159-038b-44ea-b7d4-299e0644ba39\",\n  \"chat_id\": \"801c8dd2-f762-4314-918c-c0a226ff9a29\",\n  \"responses\": [\n    {\n      \"q_id\": \"q_e5f6\",\n      \"q_type\": \"open_ended\",\n      \"content\": {\n        \"label\": \"What is your project name?\",\n        \"answer\": \"\"\n      },\n      \"skipped\": true\n    }\n  ],\n  \"user_input\": \"Build a todo app with dark mode\"\n}",
 							"options": {
 								"raw": {
 									"language": "json"
@@ -662,7 +662,7 @@
 								""
 							]
 						},
-						"description": "Example: Single open_ended question (SKIPPED).\n\nNote: Since question was skipped, ChatInput text goes to `user_input` (user prompt)"
+						"description": "Example: Single open_ended question (SKIPPED).\n\n**Key Points:**\n- q_id uses 4-digit UUID format (q_e5f6)\n- Question is skipped (skipped: true, empty answer)\n- Since question was skipped, ChatInput text goes to `user_input` (user prompt)\n- Prompt stored: \"Build a todo app with dark mode\"\n\n**Terminal Output:**\nYou'll see verbose logs showing:\n- Skipped question detection\n- user_input processing\n- Prompt storage: \"Build a todo app with dark mode\""
 					},
 					"response": []
 				}
