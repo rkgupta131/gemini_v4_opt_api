@@ -124,6 +124,34 @@ class ProjectResponse(BaseModel):
     message: str
     events_file: Optional[str] = None
 
+# Message endpoint models (for POST /stream/message/)
+class QuestionResponseContent(BaseModel):
+    """Content for question response - varies by question type"""
+    label: str
+    answer: Optional[str] = None  # For open_ended
+    selectedOption: Optional[str] = None  # For mcq
+    selectedOptions: Optional[List[str]] = None  # For multi_select
+    answers: Optional[List[Dict[str, Any]]] = None  # For form: [{"label": str, "answer": str | List[str]}]
+
+class QuestionResponse(BaseModel):
+    """Single question response"""
+    q_id: str
+    q_type: str = Field(..., description="Question type: 'open_ended', 'mcq', 'multi_select', or 'form'")
+    content: QuestionResponseContent
+    skipped: bool = False
+
+class MessageRequest(BaseModel):
+    """Request model for POST /stream/message/ endpoint"""
+    project_id: str = Field(..., description="Project identifier (required)")
+    chat_id: str = Field(..., description="Chat/conversation identifier (required, used to load context)")
+    responses: List[QuestionResponse] = Field(..., description="Array of question responses (required)")
+    user_input: Optional[str] = Field(None, description="Optional additional text input from chat textarea")
+
+class MessageResponse(BaseModel):
+    """Response model for POST /stream/message/ endpoint"""
+    status: str
+    message: str
+
 # Unified streaming request model
 class StreamRequest(BaseModel):
     """Unified request model for streaming API - action is inferred from payload"""
@@ -402,20 +430,26 @@ async def stream_events(request: StreamRequest) -> AsyncGenerator[str, None]:
                 session["page_type_config"] = page_type_config
                 
                 if page_type_key == "generic":
-                    # Need page type selection - use UI multiselect event
-                    from events import UIMultiselectEvent
-                    categories = get_all_categories()
-                    options = [{"id": key, "label": cat["display_name"]} for key, cat in categories.items()]
-                    multiselect_event = UIMultiselectEvent.create(
-                        select_id="page_type_selection",
-                        title="Please select a page type",
-                        options=options,
-                        project_id=project_id,
-                        conversation_id=conversation_id
-                    )
-                    yield yield_event(multiselect_event)
+                    # Need page type selection - use chat.question event (contract-compliant)
+                    gather_msg = emitter.emit_chat_message("I need to know what type of page you want to build.")
+                    yield yield_event(gather_msg)
                     await asyncio.sleep(0)
-                    await_input = emitter.emit_stream_await_input(reason="multiselect")
+                    
+                    categories = get_all_categories()
+                    # Convert categories to chat.question format (multi_select)
+                    question_options = [{"id": key, "label": cat["display_name"]} for key, cat in categories.items()]
+                    
+                    question_event = emitter.emit_chat_question(
+                        q_id="page_type_selection",
+                        question_type="multi_select",
+                        label="Please select a page type",
+                        is_skippable=False,
+                        content={"options": question_options}
+                    )
+                    yield yield_event(question_event)
+                    await asyncio.sleep(0)
+                    
+                    await_input = emitter.emit_stream_await_input(reason="suggestion")
                     yield yield_event(await_input)
                     await asyncio.sleep(0)
                     return
@@ -576,20 +610,26 @@ async def stream_events(request: StreamRequest) -> AsyncGenerator[str, None]:
                 needs_followup, detail_confidence = analyze_query_detail(user_input, model_family=model_family)
                 
                 if page_type_key == "generic":
-                    # Need page type selection
-                    from events import UIMultiselectEvent
-                    categories = get_all_categories()
-                    options = [{"id": key, "label": cat["display_name"]} for key, cat in categories.items()]
-                    multiselect_event = UIMultiselectEvent.create(
-                        select_id="page_type_selection",
-                        title="Please select a page type",
-                        options=options,
-                        project_id=project_id,
-                        conversation_id=conversation_id
-                    )
-                    yield yield_event(multiselect_event)
+                    # Need page type selection - use chat.question event (contract-compliant)
+                    gather_msg = emitter.emit_chat_message("I need to know what type of page you want to build.")
+                    yield yield_event(gather_msg)
                     await asyncio.sleep(0)
-                    await_input = emitter.emit_stream_await_input(reason="multiselect")
+                    
+                    categories = get_all_categories()
+                    # Convert categories to chat.question format (multi_select)
+                    question_options = [{"id": key, "label": cat["display_name"]} for key, cat in categories.items()]
+                    
+                    question_event = emitter.emit_chat_question(
+                        q_id="page_type_selection",
+                        question_type="multi_select",
+                        label="Please select a page type",
+                        is_skippable=False,
+                        content={"options": question_options}
+                    )
+                    yield yield_event(question_event)
+                    await asyncio.sleep(0)
+                    
+                    await_input = emitter.emit_stream_await_input(reason="suggestion")
                     yield yield_event(await_input)
                     await asyncio.sleep(0)
                     return
@@ -1064,6 +1104,142 @@ async def stream_endpoint(request: StreamRequest):
             "X-Accel-Buffering": "no"
         }
     )
+
+
+@app.post("/api/v1/stream/message/", response_model=MessageResponse)
+async def stream_message_endpoint(request: MessageRequest):
+    """
+    Process user answers to LLM questions and continue/resume SSE streaming.
+    
+    This endpoint:
+    1. Validates the request payload
+    2. Loads conversation context using chat_id
+    3. Processes all question responses
+    4. Continues LLM execution with answers + optional user_input
+    5. Resumes SSE streaming with updated context
+    """
+    try:
+        # Validate required fields
+        if not request.project_id:
+            raise HTTPException(status_code=400, detail="project_id is required")
+        
+        if not request.chat_id:
+            raise HTTPException(status_code=400, detail="chat_id is required")
+        
+        if not request.responses or len(request.responses) == 0:
+            raise HTTPException(status_code=400, detail="responses array is required and cannot be empty")
+        
+        # Validate each response
+        for idx, response in enumerate(request.responses):
+            if not response.q_id:
+                raise HTTPException(status_code=400, detail=f"Missing q_id in response[{idx}]")
+            
+            if response.q_type not in ["open_ended", "mcq", "multi_select", "form"]:
+                raise HTTPException(status_code=400, detail=f"Invalid q_type '{response.q_type}' in response[{idx}]. Must be one of: open_ended, mcq, multi_select, form")
+            
+            # Validate type-specific content fields
+            content = response.content
+            if response.q_type == "open_ended":
+                if content.selectedOption is not None or content.selectedOptions is not None or content.answers is not None:
+                    raise HTTPException(status_code=400, detail=f"Response[{idx}]: open_ended should only have 'answer' field")
+            elif response.q_type == "mcq":
+                if content.answer is not None or content.selectedOptions is not None or content.answers is not None:
+                    raise HTTPException(status_code=400, detail=f"Response[{idx}]: mcq should only have 'selectedOption' field")
+            elif response.q_type == "multi_select":
+                if content.answer is not None or content.selectedOption is not None or content.answers is not None:
+                    raise HTTPException(status_code=400, detail=f"Response[{idx}]: multi_select should only have 'selectedOptions' field")
+            elif response.q_type == "form":
+                if content.answer is not None or content.selectedOption is not None or content.selectedOptions is not None:
+                    raise HTTPException(status_code=400, detail=f"Response[{idx}]: form should only have 'answers' field")
+        
+        # Load conversation context using chat_id
+        # Note: In production, this should load from Supabase:
+        # SELECT * FROM chat_messages WHERE chat_id = ? ORDER BY created_at ASC
+        # For now, we use session storage with chat_id as session_id
+        session = get_or_create_session(request.chat_id)
+        
+        # Process responses and build questionnaire_answers dict
+        questionnaire_answers = {}
+        
+        # Check for open_ended question (there should be only one, and it's always alone)
+        open_ended_response = None
+        for response in request.responses:
+            if response.q_type == "open_ended":
+                if open_ended_response is not None:
+                    raise HTTPException(status_code=400, detail="Multiple open_ended questions found. Only one open_ended question is allowed.")
+                open_ended_response = response
+        
+        # Validate open_ended behavior: should be alone
+        if open_ended_response and len(request.responses) > 1:
+            raise HTTPException(status_code=400, detail="open_ended question cannot be mixed with other question types")
+        
+        # Process all responses
+        for response in request.responses:
+            if response.skipped:
+                continue  # Skip processing skipped questions
+            
+            q_id = response.q_id
+            q_type = response.q_type
+            content = response.content
+            
+            if q_type == "open_ended":
+                # For open_ended: ChatInput text goes to content.answer (no user_input expected)
+                if content.answer:
+                    questionnaire_answers[q_id] = content.answer
+            elif q_type == "mcq":
+                # For mcq: use selectedOption (may be empty string if unselected)
+                if content.selectedOption:
+                    questionnaire_answers[q_id] = content.selectedOption
+            elif q_type == "multi_select":
+                # For multi_select: use selectedOptions array
+                if content.selectedOptions:
+                    questionnaire_answers[q_id] = content.selectedOptions
+            elif q_type == "form":
+                # For form: convert answers array to dict
+                if content.answers:
+                    form_answers = {}
+                    for field in content.answers:
+                        field_label = field.get("label", "")
+                        field_answer = field.get("answer", "")
+                        form_answers[field_label] = field_answer
+                    questionnaire_answers[q_id] = form_answers
+        
+        # Store questionnaire answers in session
+        session["questionnaire_answers"] = questionnaire_answers
+        
+        # Handle user_input based on open_ended question logic
+        # If open_ended exists and NOT skipped: ChatInput text = answer (already processed above, no user_input)
+        # If open_ended exists and skipped: ChatInput text = user_input (user prompt)
+        # If no open_ended: ChatInput text = user_input (additional prompt)
+        user_input_to_use = None
+        if open_ended_response and open_ended_response.skipped:
+            # Open_ended was skipped, so user_input is the user prompt
+            user_input_to_use = request.user_input
+        elif not open_ended_response:
+            # No open_ended question, so user_input is additional prompt
+            user_input_to_use = request.user_input
+        
+        # Store user_input if provided
+        if user_input_to_use:
+            session["user_input_from_message"] = user_input_to_use
+        
+        # Store project_id and chat_id in session for context
+        session["project_id"] = request.project_id
+        session["chat_id"] = request.chat_id
+        
+        # Return success response
+        # Note: Frontend expects SSE events to continue after receiving 200 OK
+        # The frontend should then make a new request to /api/v1/stream with the updated context
+        return MessageResponse(
+            status="success",
+            message="Answers received, continuing stream"
+        )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        log(f"[MESSAGE_ENDPOINT_ERROR] {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
 @app.post("/api/v1/classify-intent", response_model=IntentResponse)

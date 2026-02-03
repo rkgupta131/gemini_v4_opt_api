@@ -6,7 +6,7 @@
 		"_postman_id": "webpage-builder-api-v1-contract",
 		"version": {
 			"major": 2,
-			"minor": 3
+			"minor": 5
 		}
 	},
 	"item": [
@@ -44,7 +44,7 @@
 								"stream"
 							]
 						},
-						"description": "Classify user intent using Gemini. Returns contract-compliant events:\n- `chat.message` - Status messages\n- `thinking.start` / `thinking.end` - Thinking indicators\n- `chat.message` - Intent result\n- `chat.question` - Questions if questionnaire needed\n- `ui.multiselect` - Page type selection if needed\n- `stream.complete` / `stream.await_input` - Terminal events"
+						"description": "Classify user intent using Gemini. Returns contract-compliant events:\n- `chat.message` - Status messages\n- `thinking.start` / `thinking.end` - Thinking indicators\n- `chat.message` - Intent result\n- `chat.question` - Questions if questionnaire needed or page type selection if generic\n- `stream.complete` / `stream.await_input` - Terminal events"
 					},
 					"response": []
 				},
@@ -248,7 +248,7 @@
 								"stream"
 							]
 						},
-						"description": "First request to generate project. Action is inferred from payload (user_input = generate_project).\n\nPayload: Only requires `user_input`, `model_family`, and optional `project_id`.\n\nSystem will:\n1. Classify intent\n2. Classify page type\n3. Ask questions if needed (via chat.question events)\n4. Wait for user input (stream.await_input)\n\nReturns:\n- `chat.message` - Status messages\n- `thinking.start` / `thinking.end` - Thinking indicators\n- `chat.question` - Questions if questionnaire needed\n- `ui.multiselect` - Page type selection if generic\n- `stream.await_input` - Waiting for user response"
+						"description": "First request to generate project. Action is inferred from payload (user_input = generate_project).\n\nPayload: Only requires `user_input`, `model_family`, and optional `project_id`.\n\nSystem will:\n1. Classify intent\n2. Classify page type\n3. Ask questions if needed (via chat.question events)\n4. Wait for user input (stream.await_input)\n\nReturns:\n- `chat.message` - Status messages\n- `thinking.start` / `thinking.end` - Thinking indicators\n- `chat.question` - Questions if questionnaire needed or page type selection if generic\n- `stream.await_input` - Waiting for user response"
 					},
 					"response": []
 				},
@@ -316,7 +316,7 @@
 								"stream"
 							]
 						},
-						"description": "First request to generate project using GPT. Action is inferred from payload (user_input = generate_project).\n\nPayload: Only requires `user_input`, `model_family`, and optional `project_id`.\n\nNote: `session_id` is optional and auto-generated if not provided.\n\nSystem will:\n1. Classify intent\n2. Classify page type\n3. Ask questions if needed (via chat.question events)\n4. Wait for user input (stream.await_input)\n\nReturns:\n- `chat.message` - Status messages\n- `thinking.start` / `thinking.end` - Thinking indicators\n- `chat.question` - Questions if questionnaire needed\n- `ui.multiselect` - Page type selection if generic\n- `stream.await_input` - Waiting for user response"
+						"description": "First request to generate project using GPT. Action is inferred from payload (user_input = generate_project).\n\nPayload: Only requires `user_input`, `model_family`, and optional `project_id`.\n\nNote: `session_id` is optional and auto-generated if not provided.\n\nSystem will:\n1. Classify intent\n2. Classify page type\n3. Ask questions if needed (via chat.question events)\n4. Wait for user input (stream.await_input)\n\nReturns:\n- `chat.message` - Status messages\n- `thinking.start` / `thinking.end` - Thinking indicators\n- `chat.question` - Questions if questionnaire needed or page type selection if generic\n- `stream.await_input` - Waiting for user response"
 					},
 					"response": []
 				},
@@ -350,7 +350,7 @@
 								"stream"
 							]
 						},
-						"description": "First request to generate project using Claude. Action is inferred from payload (user_input = generate_project).\n\nPayload: Only requires `user_input`, `model_family`, and optional `project_id`.\n\nNote: `session_id` is optional and auto-generated if not provided.\n\nSystem will:\n1. Classify intent\n2. Classify page type\n3. Ask questions if needed (via chat.question events)\n4. Wait for user input (stream.await_input)\n\nReturns:\n- `chat.message` - Status messages\n- `thinking.start` / `thinking.end` - Thinking indicators\n- `chat.question` - Questions if questionnaire needed\n- `ui.multiselect` - Page type selection if generic\n- `stream.await_input` - Waiting for user response"
+						"description": "First request to generate project using Claude. Action is inferred from payload (user_input = generate_project).\n\nPayload: Only requires `user_input`, `model_family`, and optional `project_id`.\n\nNote: `session_id` is optional and auto-generated if not provided.\n\nSystem will:\n1. Classify intent\n2. Classify page type\n3. Ask questions if needed (via chat.question events)\n4. Wait for user input (stream.await_input)\n\nReturns:\n- `chat.message` - Status messages\n- `thinking.start` / `thinking.end` - Thinking indicators\n- `chat.question` - Questions if questionnaire needed or page type selection if generic\n- `stream.await_input` - Waiting for user response"
 					},
 					"response": []
 				},
@@ -555,6 +555,114 @@
 							]
 						},
 						"description": "Modify an existing project using Claude. Returns contract-compliant streaming events."
+					},
+					"response": []
+				},
+				{
+					"name": "Post Message - Process Question Answers",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"project_id\": \"0ba08159-038b-44ea-b7d4-299e0644ba39\",\n  \"chat_id\": \"801c8dd2-f762-4314-918c-c0a226ff9a29\",\n  \"responses\": [\n    {\n      \"q_id\": \"target_audience\",\n      \"q_type\": \"mcq\",\n      \"content\": {\n        \"label\": \"Who is your target audience?\",\n        \"selectedOption\": \"young_adults\"\n      },\n      \"skipped\": false\n    },\n    {\n      \"q_id\": \"product_categories\",\n      \"q_type\": \"multi_select\",\n      \"content\": {\n        \"label\": \"What product categories do you want?\",\n        \"selectedOptions\": [\"electronics\", \"clothing\"]\n      },\n      \"skipped\": false\n    }\n  ],\n  \"user_input\": \"Make it modern and sleek\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/stream/message/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"stream",
+								"message",
+								""
+							]
+						},
+						"description": "Process user answers to LLM questions and continue/resume SSE streaming.\n\nThis endpoint:\n1. Validates the request payload\n2. Loads conversation context using chat_id\n3. Processes all question responses\n4. Continues LLM execution with answers + optional user_input\n5. Resumes SSE streaming with updated context\n\n**Payload Structure:**\n- `project_id` (required): Project identifier\n- `chat_id` (required): Chat/conversation identifier (used to load context)\n- `responses` (required): Array of question responses\n  - `q_id`: Question ID from chat.question event\n  - `q_type`: \"open_ended\" | \"mcq\" | \"multi_select\" | \"form\"\n  - `content`: Response content (varies by type)\n    - `answer`: For open_ended\n    - `selectedOption`: For mcq\n    - `selectedOptions`: For multi_select\n    - `answers`: For form (array of {label, answer})\n  - `skipped`: Whether user skipped this question\n- `user_input` (optional): Additional text input from chat textarea\n\n**Important Notes:**\n- There is ALWAYS only ONE open_ended question (never multiple)\n- open_ended questions NEVER come with other questions (always alone)\n- For open_ended questions: ChatInput text → `responses[0].content.answer` (no `user_input`)\n- If open_ended is skipped: ChatInput text → `user_input`\n- If no open_ended: ChatInput text → `user_input`\n\n**Response:**\n- 200 OK: `{\"status\": \"success\", \"message\": \"Answers received, continuing stream\"}`\n- 400 Bad Request: Validation errors\n- 404 Not Found: chat_id doesn't exist\n- 500 Internal Server Error: Processing errors\n\nAfter receiving 200 OK, frontend should make a new request to `/api/v1/stream` with updated context."
+					},
+					"response": []
+				},
+				{
+					"name": "Post Message - Open-ended Question Example",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"project_id\": \"0ba08159-038b-44ea-b7d4-299e0644ba39\",\n  \"chat_id\": \"801c8dd2-f762-4314-918c-c0a226ff9a29\",\n  \"responses\": [\n    {\n      \"q_id\": \"project_name\",\n      \"q_type\": \"open_ended\",\n      \"content\": {\n        \"label\": \"What is your project name?\",\n        \"answer\": \"My Todo App\"\n      },\n      \"skipped\": false\n    }\n  ]\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/stream/message/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"stream",
+								"message",
+								""
+							]
+						},
+						"description": "Example: Single open_ended question (NOT skipped).\n\nNote: No `user_input` field - ChatInput text goes to `responses[0].content.answer`"
+					},
+					"response": []
+				},
+				{
+					"name": "Post Message - Open-ended Question Skipped",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"project_id\": \"0ba08159-038b-44ea-b7d4-299e0644ba39\",\n  \"chat_id\": \"801c8dd2-f762-4314-918c-c0a226ff9a29\",\n  \"responses\": [\n    {\n      \"q_id\": \"project_name\",\n      \"q_type\": \"open_ended\",\n      \"content\": {\n        \"label\": \"What is your project name?\",\n        \"answer\": \"\"\n      },\n      \"skipped\": true\n    }\n  ],\n  \"user_input\": \"Build a todo app with dark mode\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/stream/message/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"stream",
+								"message",
+								""
+							]
+						},
+						"description": "Example: Single open_ended question (SKIPPED).\n\nNote: Since question was skipped, ChatInput text goes to `user_input` (user prompt)"
 					},
 					"response": []
 				}
