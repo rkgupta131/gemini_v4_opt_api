@@ -371,11 +371,12 @@ async def stream_events(request: StreamRequest) -> AsyncGenerator[str, None]:
                 await asyncio.sleep(0)
                 
                 # Stream chat response - use edit.start for streaming chunks (contract allows multiple chunks)
-                from events import EditStartEvent
+                from events import EditStartEvent, EditEndEvent
                 response_text = ""
                 loop = asyncio.get_event_loop()
                 stream_gen = generate_stream(user_input, model=smaller_model, model_family=model_family)
                 
+                edit_start_time = time.time()
                 while True:
                     chunk = await loop.run_in_executor(None, _next_chunk, stream_gen)
                     if chunk is None:
@@ -390,6 +391,17 @@ async def stream_events(request: StreamRequest) -> AsyncGenerator[str, None]:
                     )
                     yield yield_event(edit_chunk)
                     await asyncio.sleep(0)
+                
+                # Emit edit.end after streaming completes (per contract)
+                edit_duration_ms = int((time.time() - edit_start_time) * 1000)
+                edit_end = EditEndEvent.create(
+                    path="chat_response",
+                    duration_ms=edit_duration_ms,
+                    project_id=project_id,
+                    conversation_id=conversation_id
+                )
+                yield yield_event(edit_end)
+                await asyncio.sleep(0)
                 
                 thinking_end = emitter.emit_thinking_end(duration_ms=1000)
                 yield yield_event(thinking_end)
@@ -562,11 +574,12 @@ async def stream_events(request: StreamRequest) -> AsyncGenerator[str, None]:
                         yield yield_event(thinking_start)
                         await asyncio.sleep(0)
                         
-                        from events import EditStartEvent
+                        from events import EditStartEvent, EditEndEvent
                         response_text = ""
                         loop = asyncio.get_event_loop()
                         stream_gen = generate_stream(user_input, model=smaller_model, model_family=model_family)
                         
+                        edit_start_time = time.time()
                         while True:
                             chunk = await loop.run_in_executor(None, _next_chunk, stream_gen)
                             if chunk is None:
@@ -580,6 +593,17 @@ async def stream_events(request: StreamRequest) -> AsyncGenerator[str, None]:
                             )
                             yield yield_event(edit_chunk)
                             await asyncio.sleep(0)
+                        
+                        # Emit edit.end after streaming completes (per contract)
+                        edit_duration_ms = int((time.time() - edit_start_time) * 1000)
+                        edit_end = EditEndEvent.create(
+                            path="chat_response",
+                            duration_ms=edit_duration_ms,
+                            project_id=project_id,
+                            conversation_id=conversation_id
+                        )
+                        yield yield_event(edit_end)
+                        await asyncio.sleep(0)
                         
                         thinking_end = emitter.emit_thinking_end(duration_ms=1000)
                         yield yield_event(thinking_end)
@@ -787,11 +811,12 @@ async def stream_events(request: StreamRequest) -> AsyncGenerator[str, None]:
             start_time = time.time()
             
             # Stream the generation - use edit.start for streaming chunks
-            from events import EditStartEvent
+            from events import EditStartEvent, EditEndEvent
             output = ""
             loop = asyncio.get_event_loop()
             stream_gen = generate_stream(final_prompt, model=webpage_model, model_family=model_family)
             
+            edit_start_time = time.time()
             while True:
                 chunk = await loop.run_in_executor(None, _next_chunk, stream_gen)
                 if chunk is None:
@@ -806,6 +831,17 @@ async def stream_events(request: StreamRequest) -> AsyncGenerator[str, None]:
                 )
                 yield yield_event(edit_chunk)
                 await asyncio.sleep(0)
+            
+            # Emit edit.end after streaming completes (per contract)
+            edit_duration_ms = int((time.time() - edit_start_time) * 1000)
+            edit_end = EditEndEvent.create(
+                path="project_generation",
+                duration_ms=edit_duration_ms,
+                project_id=project_id,
+                conversation_id=conversation_id
+            )
+            yield yield_event(edit_end)
+            await asyncio.sleep(0)
             
             elapsed_time = time.time() - start_time
             thinking_end = emitter.emit_thinking_end(duration_ms=int(elapsed_time * 1000))
@@ -953,11 +989,12 @@ Request: {request.instruction}"""
             await asyncio.sleep(0)
             
             # Stream modification - use edit.start for streaming chunks
-            from events import EditStartEvent
+            from events import EditStartEvent, EditEndEvent
             mod_out = ""
             loop = asyncio.get_event_loop()
             stream_gen = generate_stream(mod_prompt, model=mod_model, model_family=model_family)
             
+            edit_start_time = time.time()
             while True:
                 chunk = await loop.run_in_executor(None, _next_chunk, stream_gen)
                 if chunk is None:
@@ -973,6 +1010,17 @@ Request: {request.instruction}"""
                 yield yield_event(edit_chunk)
                 await asyncio.sleep(0)
             
+            # Emit edit.end after streaming completes (per contract)
+            edit_duration_ms = int((time.time() - edit_start_time) * 1000)
+            edit_end = EditEndEvent.create(
+                path="project_modification",
+                duration_ms=edit_duration_ms,
+                project_id=project_id,
+                conversation_id=conversation_id
+            )
+            yield yield_event(edit_end)
+            await asyncio.sleep(0)
+            
             thinking_end = emitter.emit_thinking_end(duration_ms=1000)
             yield yield_event(thinking_end)
             await asyncio.sleep(0)
@@ -987,6 +1035,7 @@ Request: {request.instruction}"""
                 if mod_model != default_model:
                     mod_out = ""
                     stream_gen = generate_stream(mod_prompt, model=default_model, model_family=model_family)
+                    edit_retry_start_time = time.time()
                     while True:
                         chunk = await loop.run_in_executor(None, _next_chunk, stream_gen)
                         if chunk is None:
@@ -1001,6 +1050,17 @@ Request: {request.instruction}"""
                         )
                         yield yield_event(edit_chunk)
                         await asyncio.sleep(0)
+                    
+                    # Emit edit.end after retry streaming completes (per contract)
+                    edit_retry_duration_ms = int((time.time() - edit_retry_start_time) * 1000)
+                    edit_retry_end = EditEndEvent.create(
+                        path="project_modification",
+                        duration_ms=edit_retry_duration_ms,
+                        project_id=project_id,
+                        conversation_id=conversation_id
+                    )
+                    yield yield_event(edit_retry_end)
+                    await asyncio.sleep(0)
                     mod_project = parse_project_json(mod_out)
             
             if not mod_project:
@@ -1076,11 +1136,12 @@ Request: {request.instruction}"""
             await asyncio.sleep(0)
             
             # Stream chat response - use edit.start for streaming chunks
-            from events import EditStartEvent
+            from events import EditStartEvent, EditEndEvent
             response_text = ""
             loop = asyncio.get_event_loop()
             stream_gen = generate_stream(user_input, model=smaller_model, model_family=model_family)
             
+            edit_start_time = time.time()
             while True:
                 chunk = await loop.run_in_executor(None, _next_chunk, stream_gen)
                 if chunk is None:
@@ -1095,6 +1156,17 @@ Request: {request.instruction}"""
                 )
                 yield yield_event(edit_chunk)
                 await asyncio.sleep(0)
+            
+            # Emit edit.end after streaming completes (per contract)
+            edit_duration_ms = int((time.time() - edit_start_time) * 1000)
+            edit_end = EditEndEvent.create(
+                path="chat_response",
+                duration_ms=edit_duration_ms,
+                project_id=project_id,
+                conversation_id=conversation_id
+            )
+            yield yield_event(edit_end)
+            await asyncio.sleep(0)
             
             thinking_end = emitter.emit_thinking_end(duration_ms=1000)
             yield yield_event(thinking_end)
@@ -1538,12 +1610,13 @@ async def stream_project_generation_from_message(
         start_time = time.time()
         
         # Stream the generation
-        from events import EditStartEvent
+        from events import EditStartEvent, EditEndEvent
         output = ""
         loop = asyncio.get_event_loop()
         stream_gen = generate_stream(final_prompt, model=model, model_family=model_family)
         
         log(f"[STREAM_GENERATION] Starting LLM stream...")
+        edit_start_time = time.time()
         chunk_count = 0
         while True:
             chunk = await loop.run_in_executor(None, _next_chunk, stream_gen)
@@ -1559,6 +1632,17 @@ async def stream_project_generation_from_message(
             )
             yield yield_event(edit_chunk)
             await asyncio.sleep(0)
+        
+        # Emit edit.end after streaming completes (per contract)
+        edit_duration_ms = int((time.time() - edit_start_time) * 1000)
+        edit_end = EditEndEvent.create(
+            path="project_generation",
+            duration_ms=edit_duration_ms,
+            project_id=project_id,
+            conversation_id=conversation_id
+        )
+        yield yield_event(edit_end)
+        await asyncio.sleep(0)
         
         log(f"[STREAM_GENERATION] Received {chunk_count} chunks, total length: {len(output)} chars")
         
