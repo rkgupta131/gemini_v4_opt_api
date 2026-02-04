@@ -825,7 +825,7 @@ async def stream_events(request: StreamRequest) -> AsyncGenerator[str, None]:
                 output += chunk
                 # Use edit.start for streaming generation chunks
                 edit_chunk = EditStartEvent.create(
-                    path="project_generation",
+                    path="project.json",
                     content=chunk,
                     project_id=project_id,
                     conversation_id=conversation_id
@@ -836,14 +836,14 @@ async def stream_events(request: StreamRequest) -> AsyncGenerator[str, None]:
             # Emit edit.end after streaming completes (per contract)
             edit_duration_ms = int((time.time() - edit_start_time) * 1000)
             edit_end = EditEndEvent.create(
-                path="project_generation",
+                path="project.json",
                 duration_ms=edit_duration_ms,
                 project_id=project_id,
                 conversation_id=conversation_id
             )
             yield yield_event(edit_end)
             await asyncio.sleep(0.01)
-            log(f"[STREAM] ✓ edit.end emitted: path=project_generation, duration={edit_duration_ms}ms")
+            log(f"[STREAM] ✓ edit.end emitted: path=project.json, duration={edit_duration_ms}ms")
             
             elapsed_time = time.time() - start_time
             thinking_end = emitter.emit_thinking_end(duration_ms=int(elapsed_time * 1000))
@@ -996,15 +996,20 @@ Request: {request.instruction}"""
             loop = asyncio.get_event_loop()
             stream_gen = generate_stream(mod_prompt, model=mod_model, model_family=model_family)
             
+            # Use base project path for edit events (extract filename if full path)
+            mod_edit_path = "project.json"
+            if base_path and os.path.exists(base_path):
+                mod_edit_path = os.path.basename(base_path) if os.path.sep in base_path else base_path
+            
             edit_start_time = time.time()
             while True:
                 chunk = await loop.run_in_executor(None, _next_chunk, stream_gen)
                 if chunk is None:
                     break
                 mod_out += chunk
-                # Use edit.start for streaming modification chunks
+                # Use edit.start for streaming modification chunks with file path
                 edit_chunk = EditStartEvent.create(
-                    path="project_modification",
+                    path=mod_edit_path,
                     content=chunk,
                     project_id=project_id,
                     conversation_id=conversation_id
@@ -1015,14 +1020,14 @@ Request: {request.instruction}"""
             # Emit edit.end after streaming completes (per contract)
             edit_duration_ms = int((time.time() - edit_start_time) * 1000)
             edit_end = EditEndEvent.create(
-                path="project_modification",
+                path=mod_edit_path,
                 duration_ms=edit_duration_ms,
                 project_id=project_id,
                 conversation_id=conversation_id
             )
             yield yield_event(edit_end)
             await asyncio.sleep(0.01)
-            log(f"[STREAM] ✓ edit.end emitted: path=project_modification, duration={edit_duration_ms}ms")
+            log(f"[STREAM] ✓ edit.end emitted: path={mod_edit_path}, duration={edit_duration_ms}ms")
             
             thinking_end = emitter.emit_thinking_end(duration_ms=1000)
             yield yield_event(thinking_end)
@@ -1044,9 +1049,9 @@ Request: {request.instruction}"""
                         if chunk is None:
                             break
                         mod_out += chunk
-                        # Use edit.start for streaming modification chunks
+                        # Use edit.start for streaming modification chunks (retry) with file path
                         edit_chunk = EditStartEvent.create(
-                            path="project_modification",
+                            path=mod_edit_path,
                             content=chunk,
                             project_id=project_id,
                             conversation_id=conversation_id
@@ -1057,14 +1062,14 @@ Request: {request.instruction}"""
                     # Emit edit.end after retry streaming completes (per contract)
                     edit_retry_duration_ms = int((time.time() - edit_retry_start_time) * 1000)
                     edit_retry_end = EditEndEvent.create(
-                        path="project_modification",
+                        path=mod_edit_path,
                         duration_ms=edit_retry_duration_ms,
                         project_id=project_id,
                         conversation_id=conversation_id
                     )
                     yield yield_event(edit_retry_end)
                     await asyncio.sleep(0.01)
-                    log(f"[STREAM] ✓ edit.end emitted (retry): path=project_modification, duration={edit_retry_duration_ms}ms")
+                    log(f"[STREAM] ✓ edit.end emitted (retry): path={mod_edit_path}, duration={edit_retry_duration_ms}ms")
                     mod_project = parse_project_json(mod_out)
             
             if not mod_project:
@@ -1153,7 +1158,7 @@ Request: {request.instruction}"""
                 response_text += chunk
                 # Use edit.start for streaming chat chunks
                 edit_chunk = EditStartEvent.create(
-                    path="chat_response",
+                    path="chat_response.txt",
                     content=chunk,
                     project_id=project_id,
                     conversation_id=conversation_id
@@ -1164,7 +1169,7 @@ Request: {request.instruction}"""
             # Emit edit.end after streaming completes (per contract)
             edit_duration_ms = int((time.time() - edit_start_time) * 1000)
             edit_end = EditEndEvent.create(
-                path="chat_response",
+                path="chat_response.txt",
                 duration_ms=edit_duration_ms,
                 project_id=project_id,
                 conversation_id=conversation_id
@@ -1629,7 +1634,7 @@ async def stream_project_generation_from_message(
             output += chunk
             chunk_count += 1
             edit_chunk = EditStartEvent.create(
-                path="project_generation",
+                path="project.json",
                 content=chunk,
                 project_id=project_id,
                 conversation_id=conversation_id
@@ -1641,14 +1646,14 @@ async def stream_project_generation_from_message(
         # Emit edit.end after streaming completes (per contract)
         edit_duration_ms = int((time.time() - edit_start_time) * 1000)
         edit_end = EditEndEvent.create(
-            path="project_generation",
+            path="project.json",
             duration_ms=edit_duration_ms,
             project_id=project_id,
             conversation_id=conversation_id
         )
         yield yield_event(edit_end)
         await asyncio.sleep(0.01)
-        log(f"[STREAM_GENERATION] ✓ edit.end emitted: path=project_generation, duration={edit_duration_ms}ms")
+        log(f"[STREAM_GENERATION] ✓ edit.end emitted: path=project.json, duration={edit_duration_ms}ms")
         
         log(f"[STREAM_GENERATION] Received {chunk_count} chunks, total length: {len(output)} chars")
         
