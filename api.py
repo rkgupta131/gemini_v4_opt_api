@@ -401,7 +401,8 @@ async def stream_events(request: StreamRequest) -> AsyncGenerator[str, None]:
                     conversation_id=conversation_id
                 )
                 yield yield_event(edit_end)
-                await asyncio.sleep(0)
+                await asyncio.sleep(0.01)
+                log(f"[STREAM] ✓ edit.end emitted: path=chat_response, duration={edit_duration_ms}ms")
                 
                 thinking_end = emitter.emit_thinking_end(duration_ms=1000)
                 yield yield_event(thinking_end)
@@ -841,7 +842,8 @@ async def stream_events(request: StreamRequest) -> AsyncGenerator[str, None]:
                 conversation_id=conversation_id
             )
             yield yield_event(edit_end)
-            await asyncio.sleep(0)
+            await asyncio.sleep(0.01)
+            log(f"[STREAM] ✓ edit.end emitted: path=project_generation, duration={edit_duration_ms}ms")
             
             elapsed_time = time.time() - start_time
             thinking_end = emitter.emit_thinking_end(duration_ms=int(elapsed_time * 1000))
@@ -1019,7 +1021,8 @@ Request: {request.instruction}"""
                 conversation_id=conversation_id
             )
             yield yield_event(edit_end)
-            await asyncio.sleep(0)
+            await asyncio.sleep(0.01)
+            log(f"[STREAM] ✓ edit.end emitted: path=project_modification, duration={edit_duration_ms}ms")
             
             thinking_end = emitter.emit_thinking_end(duration_ms=1000)
             yield yield_event(thinking_end)
@@ -1060,7 +1063,8 @@ Request: {request.instruction}"""
                         conversation_id=conversation_id
                     )
                     yield yield_event(edit_retry_end)
-                    await asyncio.sleep(0)
+                    await asyncio.sleep(0.01)
+                    log(f"[STREAM] ✓ edit.end emitted (retry): path=project_modification, duration={edit_retry_duration_ms}ms")
                     mod_project = parse_project_json(mod_out)
             
             if not mod_project:
@@ -1631,7 +1635,8 @@ async def stream_project_generation_from_message(
                 conversation_id=conversation_id
             )
             yield yield_event(edit_chunk)
-            await asyncio.sleep(0)
+            # Small delay to ensure real-time streaming (Postman may buffer, but this helps)
+            await asyncio.sleep(0.01)
         
         # Emit edit.end after streaming completes (per contract)
         edit_duration_ms = int((time.time() - edit_start_time) * 1000)
@@ -1642,7 +1647,8 @@ async def stream_project_generation_from_message(
             conversation_id=conversation_id
         )
         yield yield_event(edit_end)
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.01)
+        log(f"[STREAM_GENERATION] ✓ edit.end emitted: path=project_generation, duration={edit_duration_ms}ms")
         
         log(f"[STREAM_GENERATION] Received {chunk_count} chunks, total length: {len(output)} chars")
         
