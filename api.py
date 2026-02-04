@@ -861,12 +861,15 @@ async def stream_events(request: StreamRequest) -> AsyncGenerator[str, None]:
             with open(project_json_path, "w") as f:
                 json.dump({"project": project}, f, indent=2)
             
-            emitter.emit_fs_write(
+            # Emit fs.write for project.json - MUST be streamed per contract (fs.write is single source of truth)
+            fs_write_project = emitter.emit_fs_write(
                 path="project.json",
                 kind="file",
                 language="json",
                 content=json.dumps({"project": project}, indent=2)
             )
+            yield yield_event(fs_write_project)
+            await asyncio.sleep(0)
             
             # Save all files
             files = project.get('files', {})
@@ -890,12 +893,15 @@ async def stream_events(request: StreamRequest) -> AsyncGenerator[str, None]:
                     elif file_path.endswith('.html'):
                         language = 'html'
                 
-                emitter.emit_fs_write(
+                # Emit fs.write for each file - MUST be streamed per contract
+                fs_write = emitter.emit_fs_write(
                     path=file_path,
                     kind="file",
                     language=language,
                     content=content if isinstance(content, str) else json.dumps(content)
                 )
+                yield yield_event(fs_write)
+                await asyncio.sleep(0)
             
             save_project_files(project, f"{OUTPUT_DIR}/project")
             
@@ -1633,12 +1639,15 @@ async def stream_project_generation_from_message(
         
         log(f"[STREAM_GENERATION] ✓ Saved project.json")
         
-        emitter.emit_fs_write(
+        # Emit fs.write for project.json - MUST be streamed per contract (fs.write is single source of truth)
+        fs_write_project = emitter.emit_fs_write(
             path="project.json",
             kind="file",
             language="json",
             content=json.dumps({"project": project}, indent=2)
         )
+        yield yield_event(fs_write_project)
+        await asyncio.sleep(0)
         
         # Save all files
         files = project.get('files', {})
@@ -1663,12 +1672,15 @@ async def stream_project_generation_from_message(
                 elif file_path.endswith('.html'):
                     language = 'html'
             
-            emitter.emit_fs_write(
+            # Emit fs.write for each file - MUST be streamed per contract
+            fs_write = emitter.emit_fs_write(
                 path=file_path,
                 kind="file",
                 language=language,
                 content=content if isinstance(content, str) else json.dumps(content)
             )
+            yield yield_event(fs_write)
+            await asyncio.sleep(0)
         
         save_project_files(project, f"{OUTPUT_DIR}/project")
         log(f"[STREAM_GENERATION] ✓ All files saved")
