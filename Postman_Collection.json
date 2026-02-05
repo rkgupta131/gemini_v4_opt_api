@@ -1,12 +1,12 @@
 {
 	"info": {
 		"name": "Webpage Builder AI API - Contract-Compliant Streaming",
-		"description": "Unified streaming API supporting Gemini, GPT, and Claude model families. All events follow Phase 1 LLM Streaming Contract format with Universal Event Envelope structure.\n\nStreaming is optimized for real-time event delivery with proper event loop yielding for immediate flushing.\n\n**Note on Postman SSE Streaming:**\nPostman buffers Server-Sent Events (SSE) and may display all events at once when the connection closes. This is a known Postman limitation. For real-time streaming, use:\n- Browser with EventSource API\n- curl with --no-buffer flag\n- Proper SSE client library\n\nThe API streams events in real-time; Postman just buffers them for display.",
+		"description": "Unified streaming API supporting Gemini, GPT, and Claude model families. All events follow Phase 1 LLM Streaming Contract format with Universal Event Envelope structure.\n\n**Streaming Optimization:**\n- Events are streamed with optimized delays (0.05s) between events for real-time delivery\n- Proper event loop yielding ensures immediate flushing of SSE events\n- Initial events (progress.init, progress.update, thinking.start) have delays to prevent buffering\n- Edit chunks stream with 0.05s delays for smooth real-time delivery\n\n**Note on Postman SSE Streaming:**\nPostman buffers Server-Sent Events (SSE) and may display all events at once when the connection closes. This is a known Postman limitation. For real-time streaming, use:\n- Browser with EventSource API\n- curl with --no-buffer flag\n- Proper SSE client library\n\nThe API streams events in real-time with optimized delays; Postman just buffers them for display.",
 		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
 		"_postman_id": "webpage-builder-api-v1-contract",
 		"version": {
 			"major": 2,
-			"minor": 8
+			"minor": 9
 		}
 	},
 	"item": [

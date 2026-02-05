@@ -1587,7 +1587,7 @@ async def stream_project_generation_from_message(
         log(f"[STREAM_GENERATION] Model: {model} ({model_family})")
         log(f"[STREAM_GENERATION] Prompt length: {len(final_prompt)} chars")
         
-        # Emit progress events
+        # Emit progress events with delays to ensure real-time streaming
         progress_init = emitter.emit_progress_init(
             steps=[
                 {"id": "prepare", "label": "Preparing", "status": "in_progress"},
@@ -1598,23 +1598,23 @@ async def stream_project_generation_from_message(
             mode="inline"
         )
         yield yield_event(progress_init)
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.05)  # Increased delay for better real-time streaming
         
         progress_prepare = emitter.emit_progress_update("prepare", "completed")
         yield yield_event(progress_prepare)
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.05)
         
         progress_generate = emitter.emit_progress_update("generate", "in_progress")
         yield yield_event(progress_generate)
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.05)
         
         thinking_start = emitter.emit_thinking_start()
         yield yield_event(thinking_start)
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.05)
         
         gen_msg = emitter.emit_chat_message(f"Generating project using {model} ({model_family})...")
         yield yield_event(gen_msg)
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.05)
         
         start_time = time.time()
         
@@ -1640,8 +1640,8 @@ async def stream_project_generation_from_message(
                 conversation_id=conversation_id
             )
             yield yield_event(edit_chunk)
-            # Small delay to ensure real-time streaming (Postman may buffer, but this helps)
-            await asyncio.sleep(0.01)
+            # Delay to ensure real-time streaming - helps with buffering issues
+            await asyncio.sleep(0.05)
         
         # Emit edit.end after streaming completes (per contract)
         edit_duration_ms = int((time.time() - edit_start_time) * 1000)
@@ -1660,21 +1660,21 @@ async def stream_project_generation_from_message(
         elapsed_time = time.time() - start_time
         thinking_end = emitter.emit_thinking_end(duration_ms=int(elapsed_time * 1000))
         yield yield_event(thinking_end)
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.05)
         
         progress_gen_complete = emitter.emit_progress_update("generate", "completed")
         yield yield_event(progress_gen_complete)
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.05)
         
         progress_parse = emitter.emit_progress_update("parse", "in_progress")
         yield yield_event(progress_parse)
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.05)
         
         if not output or len(output) < 100:
             log(f"[STREAM_GENERATION] ❌ Empty or very short output: {len(output)} chars")
             parse_failed = emitter.emit_progress_update("parse", "failed")
             yield yield_event(parse_failed)
-            await asyncio.sleep(0)
+            await asyncio.sleep(0.05)
             
             error_event = emitter.emit_error(
                 scope="validation",
@@ -1683,11 +1683,11 @@ async def stream_project_generation_from_message(
                 actions=["retry", "ask_user"]
             )
             yield yield_event(error_event)
-            await asyncio.sleep(0)
+            await asyncio.sleep(0.05)
             
             stream_failed = emitter.emit_stream_failed()
             yield yield_event(stream_failed)
-            await asyncio.sleep(0)
+            await asyncio.sleep(0.05)
             return
         
         log(f"[STREAM_GENERATION] Parsing JSON output...")
@@ -1697,7 +1697,7 @@ async def stream_project_generation_from_message(
             log(f"[STREAM_GENERATION] ❌ Failed to parse JSON")
             parse_failed = emitter.emit_progress_update("parse", "failed")
             yield yield_event(parse_failed)
-            await asyncio.sleep(0)
+            await asyncio.sleep(0.05)
             
             error_event = emitter.emit_error(
                 scope="validation",
@@ -1706,26 +1706,26 @@ async def stream_project_generation_from_message(
                 actions=["retry", "ask_user"]
             )
             yield yield_event(error_event)
-            await asyncio.sleep(0)
+            await asyncio.sleep(0.05)
             
             stream_failed = emitter.emit_stream_failed()
             yield yield_event(stream_failed)
-            await asyncio.sleep(0)
+            await asyncio.sleep(0.05)
             return
         
         log(f"[STREAM_GENERATION] ✓ JSON parsed successfully, {len(project.get('files', {}))} files")
         
         parse_complete = emitter.emit_progress_update("parse", "completed")
         yield yield_event(parse_complete)
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.05)
         
         save_progress = emitter.emit_progress_update("save", "in_progress")
         yield yield_event(save_progress)
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.05)
         
         parsed_msg = emitter.emit_chat_message(f"JSON parsed successfully. Project has {len(project.get('files', {}))} files.")
         yield yield_event(parsed_msg)
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.05)
         
         # Save project
         project_json_path = f"{OUTPUT_DIR}/project.json"
@@ -1742,7 +1742,7 @@ async def stream_project_generation_from_message(
             content=json.dumps({"project": project}, indent=2)
         )
         yield yield_event(fs_write_project)
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.05)
         
         # Save all files
         files = project.get('files', {})
@@ -1775,22 +1775,22 @@ async def stream_project_generation_from_message(
                 content=content if isinstance(content, str) else json.dumps(content)
             )
             yield yield_event(fs_write)
-            await asyncio.sleep(0)
+            await asyncio.sleep(0.05)  # Delay between file writes for real-time streaming
         
         save_project_files(project, f"{OUTPUT_DIR}/project")
         log(f"[STREAM_GENERATION] ✓ All files saved")
         
         save_complete = emitter.emit_progress_update("save", "completed")
         yield yield_event(save_complete)
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.05)
         
         success_msg = emitter.emit_chat_message("Base project generated successfully!")
         yield yield_event(success_msg)
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.05)
         
         complete_event = emitter.emit_stream_complete()
         yield yield_event(complete_event)
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.05)
         
         log(f"[STREAM_GENERATION] ✅ Stream complete")
         
