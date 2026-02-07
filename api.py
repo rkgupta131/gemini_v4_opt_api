@@ -1627,12 +1627,22 @@ async def stream_project_generation_from_message(
         log(f"[STREAM_GENERATION] Starting LLM stream...")
         edit_start_time = time.time()
         chunk_count = 0
+        # Use asyncio.to_thread for better async handling (Python 3.9+)
+        # This ensures proper event loop yielding for real-time streaming
         while True:
-            chunk = await loop.run_in_executor(None, _next_chunk, stream_gen)
+            try:
+                chunk = await asyncio.to_thread(_next_chunk, stream_gen)
+            except AttributeError:
+                # Fallback for Python < 3.9
+                chunk = await loop.run_in_executor(None, _next_chunk, stream_gen)
             if chunk is None:
                 break
             output += chunk
             chunk_count += 1
+            # Log chunk arrival for debugging (only first few and last few)
+            if chunk_count <= 3 or chunk_count % 50 == 0:
+                log(f"[STREAM_GENERATION] Chunk #{chunk_count} received: {len(chunk)} chars")
+            
             edit_chunk = EditStartEvent.create(
                 path="project.json",
                 content=chunk,
@@ -1640,8 +1650,9 @@ async def stream_project_generation_from_message(
                 conversation_id=conversation_id
             )
             yield yield_event(edit_chunk)
-            # Small delay to ensure real-time streaming - match /stream endpoint behavior
-            await asyncio.sleep(0.01)
+            # Yield control immediately for real-time streaming (match /stream endpoint)
+            # Note: LLM provider (Gemini) may buffer chunks before sending, which we can't control
+            await asyncio.sleep(0)
         
         # Emit edit.end after streaming completes (per contract)
         edit_duration_ms = int((time.time() - edit_start_time) * 1000)
