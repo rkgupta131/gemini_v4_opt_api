@@ -1640,8 +1640,8 @@ async def stream_project_generation_from_message(
                 conversation_id=conversation_id
             )
             yield yield_event(edit_chunk)
-            # Delay to ensure real-time streaming - helps with buffering issues
-            await asyncio.sleep(0.05)
+            # Small delay to ensure real-time streaming - match /stream endpoint behavior
+            await asyncio.sleep(0.01)
         
         # Emit edit.end after streaming completes (per contract)
         edit_duration_ms = int((time.time() - edit_start_time) * 1000)
@@ -1775,7 +1775,7 @@ async def stream_project_generation_from_message(
                 content=content if isinstance(content, str) else json.dumps(content)
             )
             yield yield_event(fs_write)
-            await asyncio.sleep(0.05)  # Delay between file writes for real-time streaming
+            await asyncio.sleep(0.01)  # Small delay between file writes for real-time streaming
         
         save_project_files(project, f"{OUTPUT_DIR}/project")
         log(f"[STREAM_GENERATION] ✓ All files saved")
