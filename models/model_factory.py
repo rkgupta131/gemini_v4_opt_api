@@ -27,10 +27,10 @@ def get_provider(model_family: str = "gemini") -> ModelProvider:
         return _provider_cache[model_family]
     
     # Import providers (lazy import to avoid errors if packages not installed)
+    # Import Gemini and GPT (always available)
     try:
         from models.providers.gemini_provider import GeminiProvider
         from models.providers.gpt_provider import GPTProvider
-        from models.providers.claude_provider import ClaudeProvider
     except ImportError as e:
         raise RuntimeError(f"Failed to import model providers: {e}")
     
@@ -40,7 +40,15 @@ def get_provider(model_family: str = "gemini") -> ModelProvider:
     elif model_family == "gpt":
         provider = GPTProvider()
     elif model_family == "claude":
-        provider = ClaudeProvider()
+        # Claude provider is optional (file may not exist)
+        try:
+            from models.providers.claude_provider import ClaudeProvider
+            provider = ClaudeProvider()
+        except ImportError:
+            raise RuntimeError(
+                "Claude provider is not available. "
+                "The claude_provider.py file is missing or dependencies are not installed."
+            )
     else:
         raise ValueError(
             f"Unsupported model family: '{model_family}'. "
@@ -84,6 +92,7 @@ def get_available_families() -> list[str]:
         pass
     
     return families
+
 
 
 

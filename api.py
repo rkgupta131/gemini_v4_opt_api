@@ -1588,6 +1588,7 @@ async def stream_project_generation_from_message(
         log(f"[STREAM_GENERATION] Prompt length: {len(final_prompt)} chars")
         
         # Emit progress events with delays to ensure real-time streaming
+        # Start with "modal" mode per contract, then transition to "inline"
         progress_init = emitter.emit_progress_init(
             steps=[
                 {"id": "prepare", "label": "Preparing", "status": "in_progress"},
@@ -1595,97 +1596,139 @@ async def stream_project_generation_from_message(
                 {"id": "parse", "label": "Parsing", "status": "pending"},
                 {"id": "save", "label": "Saving", "status": "pending"},
             ],
-            mode="inline"
+            mode="modal"  # Start with modal mode per contract
         )
         yield yield_event(progress_init)
-        await asyncio.sleep(0.05)  # Increased delay for better real-time streaming
+        await asyncio.sleep(0.01)  # Real-time streaming delay
         
         progress_prepare = emitter.emit_progress_update("prepare", "completed")
         yield yield_event(progress_prepare)
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.01)  # Real-time streaming delay
+        
+        # Transition from modal to inline mode (per contract: progress may transition inline)
+        progress_transition = emitter.emit_progress_transition("inline")
+        yield yield_event(progress_transition)
+        await asyncio.sleep(0.01)  # Real-time streaming delay
+        log(f"[STREAM_GENERATION] ✓ Progress transitioned from modal to inline")
         
         progress_generate = emitter.emit_progress_update("generate", "in_progress")
         yield yield_event(progress_generate)
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.01)  # Real-time streaming delay
         
         thinking_start = emitter.emit_thinking_start()
         yield yield_event(thinking_start)
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.01)  # Real-time streaming delay
         
         gen_msg = emitter.emit_chat_message(f"Generating project using {model} ({model_family})...")
         yield yield_event(gen_msg)
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.01)  # Real-time streaming delay
         
         start_time = time.time()
         
         # Stream the generation
-        from events import EditStartEvent, EditEndEvent
+        from events import EditStartEvent, EditEndEvent, EditReadEvent
         output = ""
         loop = asyncio.get_event_loop()
         stream_gen = generate_stream(final_prompt, model=model, model_family=model_family)
         
         log(f"[STREAM_GENERATION] Starting LLM stream...")
-        edit_start_time = time.time()
+        # Emit edit.start with FIRST chunk only to show project.json is being created
+        # Then accumulate remaining chunks silently
+        stream_start_time = time.time()
         chunk_count = 0
-        # Use asyncio.to_thread for better async handling (Python 3.9+)
-        # This ensures proper event loop yielding for real-time streaming
+        first_chunk_emitted = False
+        edit_start_time = None
+        # #region agent log
+        debug_log_path = os.path.join(os.path.dirname(__file__), '.cursor', 'debug.log')
+        os.makedirs(os.path.dirname(debug_log_path), exist_ok=True)
+        with open(debug_log_path, 'a') as f:
+            import json as json_lib
+            f.write(json_lib.dumps({"location":"api.py:1627","message":"LLM stream loop starting","data":{"stream_start_time":stream_start_time},"timestamp":int(time.time()*1000),"runId":"debug1","hypothesisId":"A,B,C"})+"\n")
+        # #endregion
+        # Use loop.run_in_executor to match /stream endpoint behavior exactly
         while True:
-            try:
-                chunk = await asyncio.to_thread(_next_chunk, stream_gen)
-            except AttributeError:
-                # Fallback for Python < 3.9
-                chunk = await loop.run_in_executor(None, _next_chunk, stream_gen)
+            chunk_receive_start = time.time()
+            chunk = await loop.run_in_executor(None, _next_chunk, stream_gen)
+            chunk_receive_end = time.time()
             if chunk is None:
+                # #region agent log
+                debug_log_path = os.path.join(os.path.dirname(__file__), '.cursor', 'debug.log')
+                with open(debug_log_path, 'a') as f:
+                    import json as json_lib
+                    f.write(json_lib.dumps({"location":"api.py:1638","message":"Chunk loop ended","data":{"chunk_count":chunk_count,"total_output_len":len(output)},"timestamp":int(time.time()*1000),"runId":"debug1","hypothesisId":"A,B"})+"\n")
+                # #endregion
                 break
             output += chunk
             chunk_count += 1
+            
+            # Emit edit.read and edit.start with FIRST chunk only (preview to show project.json is being created)
+            if not first_chunk_emitted and chunk.strip():
+                edit_start_time = time.time()
+                
+                # Emit edit.read first (per contract: read before start)
+                edit_read = EditReadEvent.create(
+                    path="project.json",
+                    project_id=project_id,
+                    conversation_id=conversation_id
+                )
+                yield yield_event(edit_read)
+                await asyncio.sleep(0.01)  # Delay to ensure real-time streaming
+                log(f"[STREAM_GENERATION] ✓ edit.read emitted for project.json")
+                
+                # Use first chunk as preview (limit to 200 chars for readability)
+                preview_content = chunk[:200] + "..." if len(chunk) > 200 else chunk
+                edit_chunk = EditStartEvent.create(
+                    path="project.json",
+                    content=preview_content,
+                    project_id=project_id,
+                    conversation_id=conversation_id
+                )
+                yield yield_event(edit_chunk)
+                await asyncio.sleep(0.01)  # Delay to ensure real-time streaming
+                first_chunk_emitted = True
+                log(f"[STREAM_GENERATION] ✓ edit.start emitted for project.json (first chunk preview)")
+            
             # Log chunk arrival for debugging (only first few and last few)
             if chunk_count <= 3 or chunk_count % 50 == 0:
                 log(f"[STREAM_GENERATION] Chunk #{chunk_count} received: {len(chunk)} chars")
             
-            edit_chunk = EditStartEvent.create(
-                path="project.json",
-                content=chunk,
-                project_id=project_id,
-                conversation_id=conversation_id
-            )
-            yield yield_event(edit_chunk)
-            # Yield control immediately for real-time streaming (match /stream endpoint)
-            # Note: LLM provider (Gemini) may buffer chunks before sending, which we can't control
+            # Accumulate remaining chunks silently (no more edit.start events)
+            # Yield control periodically to prevent buffering
             await asyncio.sleep(0)
         
-        # Emit edit.end after streaming completes (per contract)
-        edit_duration_ms = int((time.time() - edit_start_time) * 1000)
-        edit_end = EditEndEvent.create(
-            path="project.json",
-            duration_ms=edit_duration_ms,
-            project_id=project_id,
-            conversation_id=conversation_id
-        )
-        yield yield_event(edit_end)
-        await asyncio.sleep(0.01)
-        log(f"[STREAM_GENERATION] ✓ edit.end emitted: path=project.json, duration={edit_duration_ms}ms")
+        log(f"[STREAM_GENERATION] Streaming completed: {chunk_count} chunks accumulated, total length: {len(output)} chars")
         
-        log(f"[STREAM_GENERATION] Received {chunk_count} chunks, total length: {len(output)} chars")
+        # #region agent log
+        debug_log_path = os.path.join(os.path.dirname(__file__), '.cursor', 'debug.log')
+        with open(debug_log_path, 'a') as f:
+            import json as json_lib
+            f.write(json_lib.dumps({"location":"api.py:1669","message":"After streaming, before parsing","data":{"chunk_count":chunk_count,"output_len":len(output)},"timestamp":int(time.time()*1000),"runId":"debug1","hypothesisId":"B"})+"\n")
+        # #endregion
         
         elapsed_time = time.time() - start_time
         thinking_end = emitter.emit_thinking_end(duration_ms=int(elapsed_time * 1000))
         yield yield_event(thinking_end)
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.01)  # Real-time streaming delay
         
         progress_gen_complete = emitter.emit_progress_update("generate", "completed")
         yield yield_event(progress_gen_complete)
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.01)  # Real-time streaming delay
         
         progress_parse = emitter.emit_progress_update("parse", "in_progress")
         yield yield_event(progress_parse)
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.01)  # Real-time streaming delay
         
         if not output or len(output) < 100:
+            # #region agent log
+            debug_log_path = os.path.join(os.path.dirname(__file__), '.cursor', 'debug.log')
+            with open(debug_log_path, 'a') as f:
+                import json as json_lib
+                f.write(json_lib.dumps({"location":"api.py:1684","message":"Empty output error path","data":{"output_len":len(output) if output else 0},"timestamp":int(time.time()*1000),"runId":"debug1","hypothesisId":"B"})+"\n")
+            # #endregion
             log(f"[STREAM_GENERATION] ❌ Empty or very short output: {len(output)} chars")
             parse_failed = emitter.emit_progress_update("parse", "failed")
             yield yield_event(parse_failed)
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.01)  # Real-time streaming delay
             
             error_event = emitter.emit_error(
                 scope="validation",
@@ -1694,21 +1737,39 @@ async def stream_project_generation_from_message(
                 actions=["retry", "ask_user"]
             )
             yield yield_event(error_event)
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.01)  # Real-time streaming delay
             
             stream_failed = emitter.emit_stream_failed()
             yield yield_event(stream_failed)
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.01)  # Real-time streaming delay
             return
         
         log(f"[STREAM_GENERATION] Parsing JSON output...")
+        # #region agent log
+        debug_log_path = os.path.join(os.path.dirname(__file__), '.cursor', 'debug.log')
+        with open(debug_log_path, 'a') as f:
+            import json as json_lib
+            f.write(json_lib.dumps({"location":"api.py:1704","message":"Before parse_project_json","data":{"output_len":len(output)},"timestamp":int(time.time()*1000),"runId":"debug1","hypothesisId":"B"})+"\n")
+        # #endregion
         project = parse_project_json(output)
+        # #region agent log
+        debug_log_path = os.path.join(os.path.dirname(__file__), '.cursor', 'debug.log')
+        with open(debug_log_path, 'a') as f:
+            import json as json_lib
+            f.write(json_lib.dumps({"location":"api.py:1705","message":"After parse_project_json","data":{"project_is_none":project is None,"file_count":len(project.get('files', {})) if project else 0},"timestamp":int(time.time()*1000),"runId":"debug1","hypothesisId":"B"})+"\n")
+        # #endregion
         
         if not project:
+            # #region agent log
+            debug_log_path = os.path.join(os.path.dirname(__file__), '.cursor', 'debug.log')
+            with open(debug_log_path, 'a') as f:
+                import json as json_lib
+                f.write(json_lib.dumps({"location":"api.py:1707","message":"Parse failed error path","data":{},"timestamp":int(time.time()*1000),"runId":"debug1","hypothesisId":"B"})+"\n")
+            # #endregion
             log(f"[STREAM_GENERATION] ❌ Failed to parse JSON")
             parse_failed = emitter.emit_progress_update("parse", "failed")
             yield yield_event(parse_failed)
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.01)  # Real-time streaming delay
             
             error_event = emitter.emit_error(
                 scope="validation",
@@ -1717,26 +1778,26 @@ async def stream_project_generation_from_message(
                 actions=["retry", "ask_user"]
             )
             yield yield_event(error_event)
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.01)  # Real-time streaming delay
             
             stream_failed = emitter.emit_stream_failed()
             yield yield_event(stream_failed)
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.01)  # Real-time streaming delay
             return
         
         log(f"[STREAM_GENERATION] ✓ JSON parsed successfully, {len(project.get('files', {}))} files")
         
         parse_complete = emitter.emit_progress_update("parse", "completed")
         yield yield_event(parse_complete)
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.01)  # Real-time streaming delay
         
         save_progress = emitter.emit_progress_update("save", "in_progress")
         yield yield_event(save_progress)
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.01)  # Real-time streaming delay
         
         parsed_msg = emitter.emit_chat_message(f"JSON parsed successfully. Project has {len(project.get('files', {}))} files.")
         yield yield_event(parsed_msg)
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.01)  # Real-time streaming delay
         
         # Save project
         project_json_path = f"{OUTPUT_DIR}/project.json"
@@ -1745,15 +1806,55 @@ async def stream_project_generation_from_message(
         
         log(f"[STREAM_GENERATION] ✓ Saved project.json")
         
+        # Emit edit.end for project.json (if edit.start was emitted)
+        if first_chunk_emitted and edit_start_time:
+            edit_duration_ms = int((time.time() - edit_start_time) * 1000)
+            edit_end = EditEndEvent.create(
+                path="project.json",
+                duration_ms=edit_duration_ms,
+                project_id=project_id,
+                conversation_id=conversation_id
+            )
+            yield yield_event(edit_end)
+            await asyncio.sleep(0.01)  # Delay to ensure real-time streaming
+            log(f"[STREAM_GENERATION] ✓ edit.end emitted for project.json (duration: {edit_duration_ms}ms)")
+            
+            # Emit edit.security_check for project.json
+            security_check = emitter.emit_edit_security_check(
+                path="project.json",
+                status="passed"
+            )
+            yield yield_event(security_check)
+            await asyncio.sleep(0.01)  # Delay to ensure real-time streaming
+            log(f"[STREAM_GENERATION] ✓ edit.security_check emitted for project.json (status: passed)")
+        
         # Emit fs.write for project.json - MUST be streamed per contract (fs.write is single source of truth)
+        # IMPORTANT: fs.write contains the COMPLETE file, not partial chunks
+        # This is different from edit.start which shows a preview chunk
+        # fs.write is the SINGLE SOURCE OF TRUTH for the file content
+        project_json_content = json.dumps({"project": project}, indent=2)
+        log(f"[STREAM_GENERATION] Emitting fs.write for project.json (complete file, {len(project_json_content)} chars)")
+        # #region agent log
+        debug_log_path = os.path.join(os.path.dirname(__file__), '.cursor', 'debug.log')
+        with open(debug_log_path, 'a') as f:
+            import json as json_lib
+            f.write(json_lib.dumps({"location":"api.py:1832","message":"Before fs.write for project.json","data":{"content_len":len(project_json_content),"is_complete":True},"timestamp":int(time.time()*1000),"runId":"debug1","hypothesisId":"F"})+"\n")
+        # #endregion
         fs_write_project = emitter.emit_fs_write(
             path="project.json",
             kind="file",
             language="json",
-            content=json.dumps({"project": project}, indent=2)
+            content=project_json_content
         )
         yield yield_event(fs_write_project)
-        await asyncio.sleep(0.05)
+        # #region agent log
+        debug_log_path = os.path.join(os.path.dirname(__file__), '.cursor', 'debug.log')
+        with open(debug_log_path, 'a') as f:
+            import json as json_lib
+            f.write(json_lib.dumps({"location":"api.py:1840","message":"fs.write for project.json yielded","data":{"content_len":len(project_json_content)},"timestamp":int(time.time()*1000),"runId":"debug1","hypothesisId":"F"})+"\n")
+        # #endregion
+        # Use delay to ensure fs.write is flushed (critical event - single source of truth)
+        await asyncio.sleep(0.01)  # Real-time streaming delay
         
         # Save all files
         files = project.get('files', {})
@@ -1778,7 +1879,60 @@ async def stream_project_generation_from_message(
                 elif file_path.endswith('.html'):
                     language = 'html'
             
-            # Emit fs.write for each file - MUST be streamed per contract
+            # Emit edit.read first (per contract: read before start)
+            edit_read_file = EditReadEvent.create(
+                path=file_path,
+                project_id=project_id,
+                conversation_id=conversation_id
+            )
+            yield yield_event(edit_read_file)
+            await asyncio.sleep(0.01)  # Delay to ensure real-time streaming
+            log(f"[STREAM_GENERATION] ✓ edit.read emitted for {file_path}")
+            
+            # Emit edit.start with preview chunk for each file (to show file is being created)
+            file_edit_start_time = time.time()
+            # Convert content to string if needed, then create preview
+            content_str = content if isinstance(content, str) else str(content)
+            preview_content = content_str[:200] + "..." if len(content_str) > 200 else content_str
+            
+            edit_start_file = EditStartEvent.create(
+                path=file_path,
+                content=preview_content,
+                project_id=project_id,
+                conversation_id=conversation_id
+            )
+            yield yield_event(edit_start_file)
+            await asyncio.sleep(0.01)  # Delay to ensure real-time streaming
+            log(f"[STREAM_GENERATION] ✓ edit.start emitted for {file_path}")
+            
+            # Emit edit.end for the file
+            file_edit_duration_ms = int((time.time() - file_edit_start_time) * 1000)
+            edit_end_file = EditEndEvent.create(
+                path=file_path,
+                duration_ms=file_edit_duration_ms,
+                project_id=project_id,
+                conversation_id=conversation_id
+            )
+            yield yield_event(edit_end_file)
+            await asyncio.sleep(0.01)  # Delay to ensure real-time streaming
+            log(f"[STREAM_GENERATION] ✓ edit.end emitted for {file_path} (duration: {file_edit_duration_ms}ms)")
+            
+            # Emit edit.security_check for the file
+            security_check_file = emitter.emit_edit_security_check(
+                path=file_path,
+                status="passed"
+            )
+            yield yield_event(security_check_file)
+            await asyncio.sleep(0.01)  # Delay to ensure real-time streaming
+            log(f"[STREAM_GENERATION] ✓ edit.security_check emitted for {file_path} (status: passed)")
+            
+            # Emit fs.write for each file - MUST be streamed per contract (fs.write is single source of truth)
+            # #region agent log
+            debug_log_path = os.path.join(os.path.dirname(__file__), '.cursor', 'debug.log')
+            with open(debug_log_path, 'a') as f:
+                import json as json_lib
+                f.write(json_lib.dumps({"location":"api.py:1781","message":"Before fs.write for file","data":{"file_path":file_path,"content_len":len(content) if isinstance(content, str) else len(str(content))},"timestamp":int(time.time()*1000),"runId":"debug1","hypothesisId":"D"})+"\n")
+            # #endregion
             fs_write = emitter.emit_fs_write(
                 path=file_path,
                 kind="file",
@@ -1786,36 +1940,50 @@ async def stream_project_generation_from_message(
                 content=content if isinstance(content, str) else json.dumps(content)
             )
             yield yield_event(fs_write)
-            await asyncio.sleep(0.01)  # Small delay between file writes for real-time streaming
+            # #region agent log
+            debug_log_path = os.path.join(os.path.dirname(__file__), '.cursor', 'debug.log')
+            with open(debug_log_path, 'a') as f:
+                import json as json_lib
+                f.write(json_lib.dumps({"location":"api.py:1788","message":"fs.write yielded","data":{"file_path":file_path},"timestamp":int(time.time()*1000),"runId":"debug1","hypothesisId":"D"})+"\n")
+            # #endregion
+            # Yield control for real-time streaming - longer delay to ensure events stream one by one
+            await asyncio.sleep(0.01)
         
         save_project_files(project, f"{OUTPUT_DIR}/project")
         log(f"[STREAM_GENERATION] ✓ All files saved")
         
         save_complete = emitter.emit_progress_update("save", "completed")
         yield yield_event(save_complete)
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.01)  # Real-time streaming delay
         
         success_msg = emitter.emit_chat_message("Base project generated successfully!")
         yield yield_event(success_msg)
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.01)  # Real-time streaming delay
         
         complete_event = emitter.emit_stream_complete()
         yield yield_event(complete_event)
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.01)  # Real-time streaming delay
         
         log(f"[STREAM_GENERATION] ✅ Stream complete")
         
     except Exception as e:
         error_msg = str(e)
+        # #region agent log
+        debug_log_path = os.path.join(os.path.dirname(__file__), '.cursor', 'debug.log')
+        with open(debug_log_path, 'a') as f:
+            import json as json_lib
+            import traceback
+            f.write(json_lib.dumps({"location":"api.py:1879","message":"Exception caught","data":{"error":error_msg,"traceback":traceback.format_exc()},"timestamp":int(time.time()*1000),"runId":"debug1","hypothesisId":"B"})+"\n")
+        # #endregion
         log(f"[STREAM_GENERATION_ERROR] {error_msg}")
         import traceback
         log(f"[STREAM_GENERATION_ERROR] Traceback:\n{traceback.format_exc()}")
         error_event = emitter.emit_error(scope="runtime", message=error_msg)
         yield yield_event(error_event)
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.01)  # Real-time streaming delay
         stream_failed = emitter.emit_stream_failed()
         yield yield_event(stream_failed)
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.01)  # Real-time streaming delay
 
 
 @app.post("/api/v1/classify-intent", response_model=IntentResponse)

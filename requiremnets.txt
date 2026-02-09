@@ -1,7 +1,4 @@
-fastapi
-uvicorn[standard]
+streamlit
 requests
 python-dotenv
 google-genai
-openai
-anthropic
